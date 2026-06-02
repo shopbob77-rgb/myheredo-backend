@@ -10,7 +10,7 @@ const BW_CLIENT_ID = process.env.BW_CLIENT_ID;
 const BW_CLIENT_SECRET = process.env.BW_CLIENT_SECRET;
 const BW_IDENTITY_URL = 'https://identity.bitwarden.com/connect/token';
 
-app.post('/api/token', async (req, res) => {
+app.post('/', async (req, res) => {
     try {
         const params = new URLSearchParams();
         params.append('grant_type', 'client_credentials');
