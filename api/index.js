@@ -3,7 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 
 const app = express();
-app.use(cors()); 
+app.use(cors());
 app.use(express.json());
 
 const BW_CLIENT_ID = process.env.BW_CLIENT_ID;
@@ -29,7 +29,5 @@ app.post('/api/token', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Zabezpieczony most MyHeredo API działa na porcie ${PORT}`);
-});
+// Ważne dla Vercel: eksportujemy całą aplikację zamiast app.listen()
+module.exports = app;
