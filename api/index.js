@@ -7,7 +7,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo (Organization Engine) działa stabilnie!');
+    res.send('Backend MyHeredo (Organization Cipher Engine) działa!');
 });
 
 app.post('/api', async (req, res) => {
@@ -42,7 +42,7 @@ app.post('/api', async (req, res) => {
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // 2. Pobieranie kolekcji należących do tej organizacji (zgodnie ze specyfikacją)
+        // 2. Pobieranie kolekcji należących do tej organizacji
         const collectionsResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId.trim()}/collections`, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` }
@@ -56,12 +56,17 @@ app.post('/api', async (req, res) => {
             }
         }
 
-        // 3. Budowanie oficjalnego obiektu Notatki dla Organizacji (Zwykły tekst)
+        // 3. OFICJALNA STRUKTURA ZGODNA Z WALIDATOREM BITWARDEN API
+        // Pola tekstowe w trybie niezaszyfrowanym (Organization API) muszą być przekazane dokładnie w ten sposób:
         const bezpiecznaNotatka = {
-            type: 2, // Secure Note
+            type: 2, // 2 = Secure Note
             name: "MyHeredo - Protokół Sukcesji",
-            notes: tekstNotatki,
-            collectionIds: collectionId ? [collectionId] : []
+            folderId: null,
+            favorite: false,
+            collectionIds: collectionId ? [collectionId] : [],
+            secureNote: {
+                notes: tekstNotatki
+            }
         };
 
         // Wywołanie dedykowanego punktu końcowego dla Organizacji
