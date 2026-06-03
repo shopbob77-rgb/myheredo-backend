@@ -23,8 +23,8 @@ app.options('/api', (req, res) => {
 app.post('/api', async (req, res) => {
     try {
         // Pobieramy Twoje klucze bezpośrednio z bezpiecznych zmiennych Vercela
-        const clientId = process.env.BW_CLIENT_ID;
-        const clientSecret = process.env.BW_CLIENT_SECRET;
+      const clientId = process.env.client_id;
+const clientSecret = process.env.client_secret;
 
         if (!clientId || !clientSecret) {
             console.error("Błąd: Brak zmiennych środowiskowych na Vercelu!");
