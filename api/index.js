@@ -1,5 +1,9 @@
 const express = require('express');
-// RĘCZNE WYMUSZENIE NAGŁÓWKÓW CORS DLA PRZEGLĄDARKI
+const cors = require('cors');
+const axios = require('axios');
+
+const app = express();
+// RĘCZNE WYMUSZENIE NAGŁÓWKÓW CORS DLA PRZEGLĄDARKI (TERAZ MOŻEMY UŻYĆ APP.USE)
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
@@ -12,11 +16,15 @@ app.use((req, res, next) => {
     }
     next();
 });
-const cors = require('cors');
-const axios = require('axios');
 
-const app = express();
+// Tutaj zostaje Twoja druga reguła cors z paczki npm (może zostać, nie przeszkadza):
+app.use(cors({
+    origin: '*',
+    methods: ['POST', 'GET', 'OPTIONS'],
+    allowedHeaders: ['Content-Type']
+}));
 
+app.use(express.json()); // Upewnij się, że to też jest pod app = express()
 // Pełne zezwolenie na zapytania z DuckDuckera
 app.use(cors({
     origin: '*',
