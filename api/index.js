@@ -30,7 +30,7 @@ app.post('/api', async (req, res) => {
         // 2. KROK 1: Pobieranie tokenu dostępu z serwera IDENTITY (Formatowanie x-www-form-urlencoded)
         const params = new URLSearchParams();
         params.append('grant_type', 'client_credentials');
-        params.append('scope', 'api');
+       
         params.append('client_id', clientId.trim());
         params.append('client_secret', clientSecret.trim());
 
