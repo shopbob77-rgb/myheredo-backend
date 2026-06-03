@@ -7,7 +7,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo (Organization Cipher Engine) działa!');
+    res.send('Backend MyHeredo (Secure Protocol Engine) działa!');
 });
 
 app.post('/api', async (req, res) => {
@@ -18,17 +18,10 @@ app.post('/api', async (req, res) => {
         const { tekstNotatki } = req.body;
 
         if (!clientId || !clientSecret || !organizationId) {
-            return res.status(500).json({ 
-                error: "Brak skonfigurowanych zmiennych środowiskowych na Vercelu.",
-                details: { 
-                    hasClientId: !!clientId, 
-                    hasClientSecret: !!clientSecret, 
-                    hasOrgId: !!organizationId 
-                }
-            });
+            return res.status(500).json({ error: "Brak skonfigurowanych zmiennych na Vercelu." });
         }
 
-        // 1. Logowanie do Bitwarden Identity (Pobieranie tokenu)
+        // 1. Logowanie do Bitwarden (Pobieranie tokenu)
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -36,61 +29,52 @@ app.post('/api', async (req, res) => {
         });
 
         if (!tokenResponse.ok) {
-            return res.status(500).json({ error: "Błąd uwierzytelniania w Bitwarden." });
+            return res.status(500).json({ error: "Błąd uwierzytelniania w chmurze Bitwarden." });
         }
 
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // 2. Pobieranie kolekcji należących do tej organizacji
-        const collectionsResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId.trim()}/collections`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        // 2. Struktura danych dla bezpiecznego przesyłania tekstu (Bitwarden Send API)
+        // Ten endpoint natywnie przyjmuje tekst w postaci Plaintext na poziomie chmury
+        const rokPozniej = new Date();
+        rokPozniej.setFullYear(rokPozniej.getFullYear() + 1);
 
-        let collectionId = null;
-        if (collectionsResponse.ok) {
-            const collectionsData = await collectionsResponse.json();
-            if (collectionsData.data && collectionsData.data.length > 0) {
-                collectionId = collectionsData.data[0].id;
-            }
-        }
-
-        // 3. OFICJALNA STRUKTURA ZGODNA Z WALIDATOREM BITWARDEN API
-        // Pola tekstowe w trybie niezaszyfrowanym (Organization API) muszą być przekazane dokładnie w ten sposób:
-        const bezpiecznaNotatka = {
-            type: 2, // 2 = Secure Note
+        const payloadSend = {
+            organizationId: organizationId.trim(),
+            type: 1, // 1 = Typ Tekstowy (Text Send)
             name: "MyHeredo - Protokół Sukcesji",
-            folderId: null,
-            favorite: false,
-            collectionIds: collectionId ? [collectionId] : [],
-            secureNote: {
-                notes: tekstNotatki
-            }
+            text: {
+                text: tekstNotatki
+            },
+            notes: "Bezpieczny protokół wygenerowany przez aplikację MyHeredo.",
+            deletionDate: rokPozniej.toISOString(),
+            disabled: false
         };
 
-        // Wywołanie dedykowanego punktu końcowego dla Organizacji
-        const cipherResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId.trim()}/ciphers`, {
+        // 3. Wysłanie żądania utworzenia bezpiecznego zasobu
+        const sendResponse = await fetch('https://api.bitwarden.com/sends', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(bezpiecznaNotatka)
+            body: JSON.stringify(payloadSend)
         });
 
-        if (cipherResponse.ok) {
+        if (sendResponse.ok) {
             return res.status(200).json({ success: true });
         } else {
-            const cipherErr = await cipherResponse.text();
-            console.error("Błąd zapisu w organizacji:", cipherErr);
-            return res.status(500).json({ error: "Bitwarden odrzucił wpis organizacji.", details: cipherErr });
+            const sendErr = await sendResponse.text();
+            console.error("Szczegóły odrzucenia:", sendErr);
+            return res.status(500).json({ error: "Chmura Bitwarden odrzuciła strukturę danych.", details: sendErr });
         }
 
     } catch (error) {
-        console.error("Krytyczny błąd serwera:", error);
+        console.error("Błąd serwera:", error);
         return res.status(500).json({ error: "Wewnętrzny błąd serwera." });
     }
 });
 
+module.exports = app;
 module.exports = app;
