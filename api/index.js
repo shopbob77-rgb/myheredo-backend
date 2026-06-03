@@ -7,17 +7,25 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo (Organization API) działa idealnie!');
+    res.send('Backend MyHeredo (Organization Engine) działa stabilnie!');
 });
 
 app.post('/api', async (req, res) => {
     try {
         const clientId = process.env.BW_CLIENT_ID || process.env.client_id;
         const clientSecret = process.env.BW_CLIENT_SECRET || process.env.client_secret;
+        const organizationId = process.env.BW_ORGANIZATION_ID;
         const { tekstNotatki } = req.body;
 
-        if (!clientId || !clientSecret) {
-            return res.status(500).json({ error: "Brak skonfigurowanych kluczy API na Vercelu." });
+        if (!clientId || !clientSecret || !organizationId) {
+            return res.status(500).json({ 
+                error: "Brak skonfigurowanych zmiennych środowiskowych na Vercelu.",
+                details: { 
+                    hasClientId: !!clientId, 
+                    hasClientSecret: !!clientSecret, 
+                    hasOrgId: !!organizationId 
+                }
+            });
         }
 
         // 1. Logowanie do Bitwarden Identity (Pobieranie tokenu)
@@ -34,16 +42,8 @@ app.post('/api', async (req, res) => {
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // Ekstracja ID organizacji z klucza client_id (format: organization.ID-ORGANIZACJI)
-        const orgIdMatch = clientId.match(/organization\.([a-f0-9\-]+)/i);
-        const organizationId = orgIdMatch ? orgIdMatch[1] : null;
-
-        if (!organizationId) {
-            return res.status(400).json({ error: "Nie udało się wyodrębnić ID organizacji z klucza Client ID." });
-        }
-
-        // 2. Pobieranie kolekcji należących do tej organizacji (żeby dopisać notatkę)
-        const collectionsResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId}/collections`, {
+        // 2. Pobieranie kolekcji należących do tej organizacji (zgodnie ze specyfikacją)
+        const collectionsResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId.trim()}/collections`, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` }
         });
@@ -52,12 +52,11 @@ app.post('/api', async (req, res) => {
         if (collectionsResponse.ok) {
             const collectionsData = await collectionsResponse.json();
             if (collectionsData.data && collectionsData.data.length > 0) {
-                // Wybieramy pierwszą wolną kolekcję z brzegu, którą znajdziemy w organizacji
                 collectionId = collectionsData.data[0].id;
             }
         }
 
-        // 3. Budowanie oficjalnego obiektu Notatki dla Organizacji (Zwykły tekst jest w pełni akceptowany!)
+        // 3. Budowanie oficjalnego obiektu Notatki dla Organizacji (Zwykły tekst)
         const bezpiecznaNotatka = {
             type: 2, // Secure Note
             name: "MyHeredo - Protokół Sukcesji",
@@ -65,8 +64,8 @@ app.post('/api', async (req, res) => {
             collectionIds: collectionId ? [collectionId] : []
         };
 
-        // Wywołanie dedykowanego punktu końcowego dla Organizacji (zgodnie ze specyfikacją)
-        const cipherResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId}/ciphers`, {
+        // Wywołanie dedykowanego punktu końcowego dla Organizacji
+        const cipherResponse = await fetch(`https://api.bitwarden.com/organizations/${organizationId.trim()}/ciphers`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
