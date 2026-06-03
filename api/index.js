@@ -7,7 +7,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo działa w trybie pełnej automatyzacji!');
+    res.send('Backend MyHeredo działa i przesyła dane!');
 });
 
 app.post('/api', async (req, res) => {
@@ -21,8 +21,6 @@ app.post('/api', async (req, res) => {
         }
 
         // 1. Pobieranie tokenu dostępu
-        const params = new URLSearchParams();
-        params.append('grant_type', 'client_credentials');
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -36,56 +34,39 @@ app.post('/api', async (req, res) => {
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // 2. AUTOMATYCZNE TWORZENIE KOLEKCJI (Docelowe zachowanie)
-        console.log("Automatyczne tworzenie/sprawdzanie kolekcji MyHeredo...");
-        
-        const nowaKolekcja = {
-            name: "MyHeredo",
-            externalId: "myheredo-auto-collection",
-            groups: [] // Pusta tablica nadaje dostęp administratorom API
-        };
-
-        const createCollResponse = await fetch('https://api.bitwarden.com/collections', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(nowaKolekcja)
+        // 2. Pobranie listy kolekcji w celu dopasowania poprawnego ID
+        const collectionsResponse = await fetch('https://api.bitwarden.com/collections', {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
         });
 
         let collectionId = null;
-
-        if (createCollResponse.ok) {
-            const createdCollData = await createCollResponse.json();
-            collectionId = createdCollData.id;
-            console.log("Pomyślnie utworzono nową dedykowaną kolekcję:", collectionId);
-        } else {
-            // Jeśli kolekcja istnieje lub nie można jej stworzyć, próbujemy pobrać listę, 
-            // a w razie niepowodzenia tworzymy awaryjny punkt zapisu bezpośredniego.
-            const altResponse = await fetch('https://api.bitwarden.com/collections', {
-                method: 'GET',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            
-            if (altResponse.ok) {
-                const altData = await altResponse.json();
-                collectionId = altData.data?.[0]?.id;
+        if (collectionsResponse.ok) {
+            const collectionsData = await collectionsResponse.json();
+            // Próba znalezienia jakiejkolwiek istniejącej kolekcji w organizacji
+            if (collectionsData.data && collectionsData.data.length > 0) {
+                collectionId = collectionsData.data[0].id;
             }
         }
 
-        // Jeśli z jakiegoś powodu organizacja blokuje kolekcje, Bitwarden pozwala na zapis bez podawania ID kolekcji,
-        // wrzucając element do głównego sejfu organizacji (jako "Nieprzypisane").
-        const idKolekcjiDoZapisu = collectionId ? [collectionId] : [];
-
-        // 3. Tworzenie bezpiecznej notatki
+        // 3. Budowanie pancernego obiektu notatki
+        // Jeśli nie wykryto żadnej kolekcji, przesyłamy pustą tablicę, 
+        // ale upewniamy się, że struktura obiektu spełnia minimalne wymagania organizacji.
         const bezpiecznyElement = {
             type: 2, 
             name: "MyHeredo - Protokół Sukcesji",
             notes: tekstNotatki,
-            collectionIds: idKolekcjiDoZapisu,
             secureNote: { type: 0 }
         };
+
+        // Bitwarden wymaga przypisania do kolekcji dla zasobów organizacji.
+        // Jeśli znaleźliśmy ID kolekcji, dołączamy je do obiektu.
+        if (collectionId) {
+            bezpiecznyElement.collectionIds = [collectionId];
+        } else {
+            // Wymóg niektórych wersji API Bitwarden dla zasobów organizacji bez jawnej kolekcji
+            bezpiecznyElement.collectionIds = [];
+        }
 
         const cipherResponse = await fetch('https://api.bitwarden.com/ciphers', {
             method: 'POST',
@@ -100,6 +81,7 @@ app.post('/api', async (req, res) => {
             return res.status(200).json({ success: true });
         } else {
             const cipherErr = await cipherResponse.text();
+            console.error("Szczegóły odrzucenia przez Bitwarden:", cipherErr);
             return res.status(500).json({ error: "Bitwarden odrzucił zapis zasobu.", details: cipherErr });
         }
 
