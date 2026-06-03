@@ -7,7 +7,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo działa i przesyła dane!');
+    res.send('Backend MyHeredo gotowy do akcji!');
 });
 
 app.post('/api', async (req, res) => {
@@ -20,7 +20,7 @@ app.post('/api', async (req, res) => {
             return res.status(500).json({ error: "Brak skonfigurowanych kluczy API na Vercelu." });
         }
 
-        // 1. Pobieranie tokenu dostępu
+        // 1. Logowanie i pobieranie tokenu dostępu
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -34,7 +34,12 @@ app.post('/api', async (req, res) => {
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // 2. Pobranie listy kolekcji w celu dopasowania poprawnego ID
+        // EKSTRAKCJA ID ORGANIZACJI: Klucze client_id dla organizacji mają format: organization.ID_ORGANIZACJI
+        // Wyciągamy czyste ID organizacji potrzebne do nagłówków i obiektów
+        const orgIdMatch = clientId.match(/organization\.([a-f0-9\-]+)/i);
+        const organizationId = orgIdMatch ? orgIdMatch[1] : null;
+
+        // 2. Pobieranie listy kolekcji, aby przypisać wymagany punkt zapisu
         const collectionsResponse = await fetch('https://api.bitwarden.com/collections', {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` }
@@ -43,30 +48,27 @@ app.post('/api', async (req, res) => {
         let collectionId = null;
         if (collectionsResponse.ok) {
             const collectionsData = await collectionsResponse.json();
-            // Próba znalezienia jakiejkolwiek istniejącej kolekcji w organizacji
             if (collectionsData.data && collectionsData.data.length > 0) {
                 collectionId = collectionsData.data[0].id;
             }
         }
 
-        // 3. Budowanie pancernego obiektu notatki
-        // Jeśli nie wykryto żadnej kolekcji, przesyłamy pustą tablicę, 
-        // ale upewniamy się, że struktura obiektu spełnia minimalne wymagania organizacji.
+        if (!collectionId) {
+            return res.status(400).json({ error: "Nie znaleziono wymaganej kolekcji w organizacji." });
+        }
+
+        // 3. OFICJALNA STRUKTURA CIPHER DLA ORGANIZACJI W BITWARDEN
+        // Dołączamy wymagane pola identyfikacyjne organizacji
         const bezpiecznyElement = {
-            type: 2, 
+            organizationId: organizationId,
+            type: 2, // Secure Note
             name: "MyHeredo - Protokół Sukcesji",
             notes: tekstNotatki,
-            secureNote: { type: 0 }
+            collectionIds: [collectionId],
+            secureNote: {
+                type: 0
+            }
         };
-
-        // Bitwarden wymaga przypisania do kolekcji dla zasobów organizacji.
-        // Jeśli znaleźliśmy ID kolekcji, dołączamy je do obiektu.
-        if (collectionId) {
-            bezpiecznyElement.collectionIds = [collectionId];
-        } else {
-            // Wymóg niektórych wersji API Bitwarden dla zasobów organizacji bez jawnej kolekcji
-            bezpiecznyElement.collectionIds = [];
-        }
 
         const cipherResponse = await fetch('https://api.bitwarden.com/ciphers', {
             method: 'POST',
@@ -81,7 +83,7 @@ app.post('/api', async (req, res) => {
             return res.status(200).json({ success: true });
         } else {
             const cipherErr = await cipherResponse.text();
-            console.error("Szczegóły odrzucenia przez Bitwarden:", cipherErr);
+            console.error("Bitwarden odrzucił żądanie. Powód:", cipherErr);
             return res.status(500).json({ error: "Bitwarden odrzucił zapis zasobu.", details: cipherErr });
         }
 
