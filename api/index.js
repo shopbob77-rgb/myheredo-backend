@@ -3,19 +3,39 @@ const cors = require('cors');
 const axios = require('axios');
 
 const app = express();
-// RĘCZNE WYMUSZENIE NAGŁÓWKÓW CORS DLA PRZEGLĄDARKI (TERAZ MOŻEMY UŻYĆ APP.USE)
-app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    
-    // Jeśli przeglądarka wysyła zapytanie testowe OPTIONS, od razu odpowiadamy OK (200)
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
+
+// 1. Włączamy obsługę CORS z jawnym statusem dla OPTIONS
+app.use(cors({
+    origin: 'https://myheredo.pl',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 200 // Wymusza status 200 OK dla zapytań OPTIONS
+}));
+
+app.use(express.json());
+
+// 2. Obsługa zapytania próbnego OPTIONS bezpośrednio na /api (pancerne zabezpieczenie)
+app.options('/api', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', 'https://myheredo.pl');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.sendStatus(200);
 });
+
+// 3. Twoja główna funkcja odbierająca dane z aplikacji
+app.post('/api', async (req, res) => {
+    try {
+        // ... Twój istniejący kod pobierający token z Bitwardena ...
+        // Na końcu udanego procesu pamiętaj o odesłaniu odpowiedzi, np.:
+        // return res.json({ access_token: "pobrany_token" });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).send("Błąd serwera");
+    }
+});
+
+// Eksport dla architektury serverless Vercela
+module.exports = app;
 
 // Tutaj zostaje Twoja druga reguła cors z paczki npm (może zostać, nie przeszkadza):
 app.use(cors({
