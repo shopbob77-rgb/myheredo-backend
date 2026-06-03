@@ -3,83 +3,87 @@ const cors = require('cors');
 
 const app = express();
 
-// Pełne zezwolenie na komunikację z Twoim front-endem
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// Pomocnicza trasa testowa, żeby sprawdzić czy serwer w ogóle żyje
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo działa i czeka na zapytania POST!');
+    res.send('Backend MyHeredo działa w trybie pełnej automatyzacji!');
 });
 
-// Główna trasa obsługująca zapis do Bitwardena
 app.post('/api', async (req, res) => {
     try {
-        // 1. Pobieramy klucze bezpośrednio z bezpiecznych zmiennych Vercela
         const clientId = process.env.BW_CLIENT_ID || process.env.client_id;
         const clientSecret = process.env.BW_CLIENT_SECRET || process.env.client_secret;
         const { tekstNotatki } = req.body;
 
         if (!clientId || !clientSecret) {
-            console.error("Błąd: Brak zmiennych środowiskowych na Vercelu!");
-            return res.status(500).json({ error: "Serwer nie posiada skonfigurowanych kluczy API Bitwarden." });
+            return res.status(500).json({ error: "Brak skonfigurowanych kluczy API na Vercelu." });
         }
 
-        console.log("Próba logowania do Bitwarden Identity za pomocą:", clientId);
-
-        // 2. KROK 1: Pobieranie tokenu dostępu z serwera IDENTITY (Formatowanie x-www-form-urlencoded)
+        // 1. Pobieranie tokenu dostępu
         const params = new URLSearchParams();
         params.append('grant_type', 'client_credentials');
-       
-        params.append('client_id', clientId.trim());
-        params.append('client_secret', clientSecret.trim());
-
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: params
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`
         });
 
         if (!tokenResponse.ok) {
-            const tokenErr = await tokenResponse.text();
-            console.error("Bitwarden Identity odrzucił klucze:", tokenErr);
-            return res.status(500).json({ error: "Błąd uwierzytelniania w Bitwarden. Zweryfikuj klucze." });
+            return res.status(500).json({ error: "Błąd uwierzytelniania w Bitwarden." });
         }
 
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
-        console.log("Sukces: Pomyślnie pobrano token autoryzacyjny!");
 
-        // 3. KROK 2: Szukanie ID kolekcji o nazwie "MyHeredo" lub pobranie pierwszej lepszej dostępnej
-        const collectionsResponse = await fetch('https://api.bitwarden.com/collections', {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
+        // 2. AUTOMATYCZNE TWORZENIE KOLEKCJI (Docelowe zachowanie)
+        console.log("Automatyczne tworzenie/sprawdzanie kolekcji MyHeredo...");
+        
+        const nowaKolekcja = {
+            name: "MyHeredo",
+            externalId: "myheredo-auto-collection",
+            groups: [] // Pusta tablica nadaje dostęp administratorom API
+        };
+
+        const createCollResponse = await fetch('https://api.bitwarden.com/collections', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(nowaKolekcja)
         });
 
         let collectionId = null;
-        if (collectionsResponse.ok) {
-            const collectionsData = await collectionsResponse.json();
-            const existingColl = collectionsData.data?.find(c => c.name === "MyHeredo" || c.name === "Sejf cyfrowy -demo");
-            if (existingColl) {
-                collectionId = existingColl.id;
-            } else if (collectionsData.data && collectionsData.data.length > 0) {
-                collectionId = collectionsData.data[0].id;
+
+        if (createCollResponse.ok) {
+            const createdCollData = await createCollResponse.json();
+            collectionId = createdCollData.id;
+            console.log("Pomyślnie utworzono nową dedykowaną kolekcję:", collectionId);
+        } else {
+            // Jeśli kolekcja istnieje lub nie można jej stworzyć, próbujemy pobrać listę, 
+            // a w razie niepowodzenia tworzymy awaryjny punkt zapisu bezpośredniego.
+            const altResponse = await fetch('https://api.bitwarden.com/collections', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (altResponse.ok) {
+                const altData = await altResponse.json();
+                collectionId = altData.data?.[0]?.id;
             }
         }
 
-        if (!collectionId) {
-            console.error("Nie znaleziono żadnej kolekcji w organizacji.");
-            return res.status(400).json({ error: "Nie znaleziono żadnej kolekcji w organizacji Bitwarden. Utwórz choć jedną kolekcję w panelu." });
-        }
+        // Jeśli z jakiegoś powodu organizacja blokuje kolekcje, Bitwarden pozwala na zapis bez podawania ID kolekcji,
+        // wrzucając element do głównego sejfu organizacji (jako "Nieprzypisane").
+        const idKolekcjiDoZapisu = collectionId ? [collectionId] : [];
 
-        // 4. KROK 3: Wysłanie bezpiecznej notatki jako nowy zasób (Cipher) w organizacji
+        // 3. Tworzenie bezpiecznej notatki
         const bezpiecznyElement = {
-            type: 2, // Zabezpieczona notatka (Secure Note)
+            type: 2, 
             name: "MyHeredo - Protokół Sukcesji",
             notes: tekstNotatki,
-            collectionIds: [collectionId],
+            collectionIds: idKolekcjiDoZapisu,
             secureNote: { type: 0 }
         };
 
@@ -93,21 +97,15 @@ app.post('/api', async (req, res) => {
         });
 
         if (cipherResponse.ok) {
-            console.log("Notatka została pomyślnie zapisana w Bitwardenie!");
             return res.status(200).json({ success: true });
         } else {
             const cipherErr = await cipherResponse.text();
-            console.error("Bitwarden API odrzucił zapis notatki:", cipherErr);
             return res.status(500).json({ error: "Bitwarden odrzucił zapis zasobu.", details: cipherErr });
         }
 
     } catch (error) {
-        console.error("Krytyczny błąd serwera proxy:", error);
-        return res.status(500).json({ error: "Wewnętrzny błąd serwera podczas przetwarzania protokołu." });
+        return res.status(500).json({ error: "Wewnętrzny błąd serwera." });
     }
 });
-
-// Eksport aplikacji dla środowiska Vercel Serverless
-module.exports = app;
 
 module.exports = app;
