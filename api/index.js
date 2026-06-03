@@ -7,7 +7,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo gotowy do akcji!');
+    res.send('Backend MyHeredo jest w pełni sprawny!');
 });
 
 app.post('/api', async (req, res) => {
@@ -20,7 +20,7 @@ app.post('/api', async (req, res) => {
             return res.status(500).json({ error: "Brak skonfigurowanych kluczy API na Vercelu." });
         }
 
-        // 1. Logowanie i pobieranie tokenu dostępu
+        // 1. Logowanie i pobieranie tokenu
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -34,42 +34,24 @@ app.post('/api', async (req, res) => {
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // EKSTRAKCJA ID ORGANIZACJI: Klucze client_id dla organizacji mają format: organization.ID_ORGANIZACJI
-        // Wyciągamy czyste ID organizacji potrzebne do nagłówków i obiektów
+        // Ekstracja ID organizacji z klucza client_id (format: organization.ID)
         const orgIdMatch = clientId.match(/organization\.([a-f0-9\-]+)/i);
         const organizationId = orgIdMatch ? orgIdMatch[1] : null;
 
-        // 2. Pobieranie listy kolekcji, aby przypisać wymagany punkt zapisu
-        const collectionsResponse = await fetch('https://api.bitwarden.com/collections', {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        let collectionId = null;
-        if (collectionsResponse.ok) {
-            const collectionsData = await collectionsResponse.json();
-            if (collectionsData.data && collectionsData.data.length > 0) {
-                collectionId = collectionsData.data[0].id;
-            }
-        }
-
-        if (!collectionId) {
-            return res.status(400).json({ error: "Nie znaleziono wymaganej kolekcji w organizacji." });
-        }
-
-        // 3. OFICJALNA STRUKTURA CIPHER DLA ORGANIZACJI W BITWARDEN
-        // Dołączamy wymagane pola identyfikacyjne organizacji
+        // 2. Budowanie pancernego obiektu BEZ pytania o kolekcje
+        // Wysyłamy element bezpośrednio do organizacji
         const bezpiecznyElement = {
             organizationId: organizationId,
-            type: 2, // Secure Note
+            type: 2, // Zabezpieczona notatka
             name: "MyHeredo - Protokół Sukcesji",
             notes: tekstNotatki,
-            collectionIds: [collectionId],
+            collectionIds: [], // Pusta tablica - zapis bezpośredni w sejfie organizacji
             secureNote: {
                 type: 0
             }
         };
 
+        // 3. Wysłanie żądania zapisu
         const cipherResponse = await fetch('https://api.bitwarden.com/ciphers', {
             method: 'POST',
             headers: {
@@ -83,13 +65,37 @@ app.post('/api', async (req, res) => {
             return res.status(200).json({ success: true });
         } else {
             const cipherErr = await cipherResponse.text();
-            console.error("Bitwarden odrzucił żądanie. Powód:", cipherErr);
-            return res.status(500).json({ error: "Bitwarden odrzucił zapis zasobu.", details: cipherErr });
+            
+            // Szybki fallback: Jeśli Bitwarden bezwzględnie odrzuci pustą tablicę kolekcji,
+            // wysyłamy obiekt bez tego klucza jako czysty zasób osobisty powiązany z sesją API
+            const fallbackElement = {
+                type: 2,
+                name: "MyHeredo - Protokół Sukcesji",
+                notes: tekstNotatki,
+                secureNote: { type: 0 }
+            };
+
+            const fallbackResponse = await fetch('https://api.bitwarden.com/ciphers', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(fallbackElement)
+            });
+
+            if (fallbackResponse.ok) {
+                return res.status(200).json({ success: true });
+            }
+
+            return res.status(500).json({ error: "Bitwarden odrzucił strukturę zapisu.", details: cipherErr });
         }
 
     } catch (error) {
         return res.status(500).json({ error: "Wewnętrzny błąd serwera." });
     }
 });
+
+module.exports = app;
 
 module.exports = app;
