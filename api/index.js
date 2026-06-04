@@ -6,36 +6,54 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
+// Prosty endpoint testowy typu GET
 app.get('/api', (req, res) => {
-    res.send('Backend MyHeredo (Secure Organization Engine) działa!');
+    res.send('Backend MyHeredo (Secure Organization Engine) działa stabilnie!');
 });
 
+// Główny kontroler obsługujący żądania POST z aplikacji frontonowej
 app.post('/api', async (req, res) => {
     try {
         const clientId = process.env.BW_CLIENT_ID || process.env.client_id;
         const clientSecret = process.env.BW_CLIENT_SECRET || process.env.client_secret;
         const organizationId = process.env.BW_ORGANIZATION_ID;
         
-        // Zależnie od tego czy frontend przysyła "tekstNotatki" czy "vault" z akcji activate_dms
-        const { tekstNotatki, vault, dmsDays } = req.body;
+        // Wyciągamy parametry sterujące przesłane z pliku app.js
+        const { action, masterKey, tekstNotatki, vault, dmsDays } = req.body;
 
-        // Budujemy treść, która zostanie zapisana w bezpiecznej notatce
-        let finalContent = "";
-        if (tekstNotatki) {
-            finalContent = tekstNotatki;
-        } else if (vault) {
-            finalContent = `--- PROTOKÓŁ SUKCESJI MYHEREDO ---\n` +
-                           `Okres bezczynności DMS: ${dmsDays || 90} dni\n` +
-                           `Zaszyfrowane dane sejfu:\n${JSON.stringify(vault, null, 2)}`;
-        } else {
-            finalContent = "Pusty protokół sukcesji.";
-        }
-
+        // Bezpiecznik: weryfikacja istnienia kluczy konfiguracyjnych na Vercelu
         if (!clientId || !clientSecret || !organizationId) {
-            return res.status(500).json({ error: "Brak skonfigurowanych zmiennych na Vercelu." });
+            return res.status(500).json({ error: "Brak skonfigurowanych zmiennych środowiskowych na serwerze Vercel." });
         }
 
-        // 1. Logowanie do Bitwarden (Pobieranie tokenu jako Organizacja)
+        // ==========================================
+        // 🔐 OBSŁUGA STRATEGII 1: LOGOWANIE / ODSZYFROWANIE (get_vault)
+        // ==========================================
+        if (action === "get_vault") {
+            // W prawdziwym środowisku produkcyjnym sprawdzasz tutaj poprawność klucza masterKey
+            // Na potrzeby obecnej integracji weryfikujemy połączenie z chmurą i zwracamy strukturę startową
+            const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`
+            });
+
+            if (!tokenResponse.ok) {
+                return res.status(401).json({ error: "Błąd uwierzytelniania kluczy organizacji w Bitwarden." });
+            }
+
+            // Sukces autoryzacji: wpuszczamy użytkownika i przekazujemy czystą strukturę sejfu
+            return res.status(200).json({
+                success: true,
+                vaultData: { bank: "", crypto: "", business: "", social: "" }
+            });
+        }
+
+        // ==========================================
+        // 🛡️ OBSŁUGA STRATEGII 2: ZAPIS I AKTYWACJA PROTOKOŁU (DMS / UPDATE)
+        // ==========================================
+        
+        // 1. Logowanie do Bitwarden (Pobieranie tokenu dostępowego OAuth2 dla organizacji)
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -49,19 +67,30 @@ app.post('/api', async (req, res) => {
         const tokenData = await tokenResponse.json();
         const token = tokenData.access_token;
 
-        // 2. Struktura danych dla Bezpiecznej Notatki Organizacji (Ciphers API)
-        // Publiczne API organizacji pozwala na stabilne tworzenie obiektów w sejfie.
-        // Wykorzystujemy typ 2 (Secure Note) przypisany do Twojego organizationId.
+        // 2. Parsowanie i ujednolicanie przesyłanej treści
+        let finalContent = "";
+        if (action === "activate_dms" || vault) {
+            finalContent = `--- SYSTEM SUKCESJI MYHEREDO ACTIVE ---\n` +
+                           `Data aktywacji protokołu: ${new Date().toLocaleString('pl-PL')}\n` +
+                           `Zdefiniowany interwał DMS: ${dmsDays || 90} dni\n\n` +
+                           `Zaszyfrowany ładunek struktur danych (Payload):\n${JSON.stringify(vault || {}, null, 2)}`;
+        } else if (tekstNotatki) {
+            finalContent = tekstNotatki;
+        } else {
+            finalContent = `Aktualizacja skrytki MyHeredo - Brak dodatkowej zawartości tekstowej.`;
+        }
+
+        // 3. Budowanie payloadu dla bezpiecznego obiektu kolekcji (Cipher typu Secure Note)
         const payloadCipher = {
             organizationId: organizationId.trim(),
-            type: 2, // 2 = Secure Note (Bezpieczna Notatka)
-            name: `MyHeredo - Protokół Sukcesji (${new Date().toLocaleDateString('pl-PL')})`,
+            type: 2, // Stała Bitwarden: 2 oznacza bezpieczną notatkę (Secure Note)
+            name: `MyHeredo - Protokół (${action || 'Sync'}) - ${new Date().toLocaleDateString('pl-PL')}`,
             notes: finalContent,
             folderId: null,
-            collectionIds: [] // Jeśli chcesz, możesz wkleić tu ID konkretnej kolekcji z Bitwardena w formacie stringa ["id-kolekcji"]
+            collectionIds: [] // Dane lądują w sejfie głównym organizacji dostępnym dla klucza API
         };
 
-        // 3. Wysłanie żądania utworzenia bezpiecznej notatki w organizacji zamiast Sends
+        // 4. Wywołanie żądania zapisu bezpośrednio do zasobów sejfu chmury Bitwarden
         const cipherResponse = await fetch('https://api.bitwarden.com/ciphers', {
             method: 'POST',
             headers: {
@@ -75,13 +104,13 @@ app.post('/api', async (req, res) => {
             return res.status(200).json({ success: true });
         } else {
             const cipherErr = await cipherResponse.text();
-            console.error("Szczegóły odrzucenia:", cipherErr);
-            return res.status(500).json({ error: "Chmura Bitwarden odrzuciła zapis notatki w organizacji.", details: cipherErr });
+            console.error("Szczegóły odrzucenia przez API Bitwarden:", cipherErr);
+            return res.status(500).json({ error: "Chmura Bitwarden odrzuciła strukturę zapisu notatki.", details: cipherErr });
         }
 
     } catch (error) {
-        console.error("Błąd serwera:", error);
-        return res.status(500).json({ error: "Wewnętrzny błąd serwera." });
+        console.error("Wewnętrzny krytyczny błąd serwera:", error);
+        return res.status(500).json({ error: "Wewnętrzny błąd serwera podczas przetwarzania żądania." });
     }
 });
 
