@@ -1,37 +1,43 @@
+const https = require('https');
+
 module.exports = async (req, res) => {
+    // 1. Zawsze zezwalaj na połączenie z Twoją domeną (CORS)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Bitwarden-Client-Version');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
-    try {
-        const body = await new Promise(resolve => {
-            let data = '';
-            req.on('data', chunk => data += chunk);
-            req.on('end', () => resolve(JSON.parse(data || '{}')));
-        });
+    // 2. Pobierz dane z zapytania
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+        const payload = body;
 
-        // Używamy natywnego fetch, który jest stabilny w Vercel
-        const response = await fetch('https://api.bitwarden.com/ciphers', {
+        // 3. Skonfiguruj połączenie do Bitwarden
+        const options = {
+            hostname: 'api.bitwarden.com',
+            path: '/ciphers', // lub /sync, zależnie od tego, co chcesz zrobić
             method: 'POST',
             headers: {
                 'Authorization': req.headers['authorization'],
                 'Content-Type': 'application/json',
-                'Device-Type': '1',
-                'Bitwarden-Client-Version': '2024.0.0',
+                'Device-Type': '1', // TO JEST KLUCZOWE: 1 = Desktop
+                'Bitwarden-Client-Version': '2024.0.0', // TO JEST KLUCZOWE
                 'Device-Identifier': '00000000-0000-0000-0000-000000000000'
-            },
-            body: JSON.stringify(body)
+            }
+        };
+
+        const proxy = https.request(options, (proxyRes) => {
+            let data = '';
+            proxyRes.on('data', chunk => data += chunk);
+            proxyRes.on('end', () => {
+                res.status(proxyRes.statusCode).json(JSON.parse(data || '{}'));
+            });
         });
 
-        const data = await response.json();
-        
-        // Zwracamy wynik z Bitwarden bezpośrednio do frontendu
-        return res.status(response.status).json(data);
-
-    } catch (error) {
-        console.error("Błąd połączenia z Bitwarden:", error);
-        return res.status(500).json({ error: "Nie udało się połączyć z Bitwarden", details: error.message });
-    }
+        proxy.on('error', (err) => res.status(500).json({ error: err.message }));
+        proxy.write(payload);
+        proxy.end();
+    });
 };
