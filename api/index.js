@@ -27,6 +27,7 @@ module.exports = async (req, res) => {
             const data = body ? JSON.parse(body) : {};
             const { action, vault } = data;
 
+            // Logowanie
             const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
             const tokenRes = await makeHttpsRequest({
                 hostname: 'identity.bitwarden.com',
@@ -42,13 +43,12 @@ module.exports = async (req, res) => {
                 return res.status(200).json({ success: true, vaultData: {} });
             }
 
-            // OSTATECZNY ZAPIS
+            // OSTATECZNIE MINIMALISTYCZNY ZAPIS
+            // Usuwamy collectionIds oraz skomplikowane obiekty
             const cipher = JSON.stringify({
-                type: 2,
-                name: "MyHeredo Protokół DMS",
-                notes: JSON.stringify(vault || { info: "Wygenerowano przez MyHeredo" }),
-                organizationId: process.env.BW_ORGANIZATION_ID,
-                secureNote: { type: 0 }
+                type: 2, // Secure Note
+                name: "MyHeredo Protokół",
+                notes: JSON.stringify(vault || { info: "Protokół wygenerowany" })
             });
 
             const cipherOptions = {
@@ -63,11 +63,11 @@ module.exports = async (req, res) => {
             };
 
             const postRes = await makeHttpsRequest(cipherOptions, cipher);
-            // Jeśli status jest 200-299, uznajemy za sukces
+            
             if (postRes.statusCode >= 200 && postRes.statusCode < 300) {
-                return res.status(200).json({ success: true, message: "Zapisano w Bitwarden!" });
+                return res.status(200).json({ success: true, message: "Zapisano!" });
             } else {
-                return res.status(postRes.statusCode).json({ error: "Bitwarden odrzucił zapis", details: postRes.body });
+                return res.status(postRes.statusCode).json({ error: "Odrzucono", details: postRes.body });
             }
         } catch (e) {
             return res.status(500).json({ error: e.message });
