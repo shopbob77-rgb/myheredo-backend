@@ -30,7 +30,7 @@ module.exports = async (req, res) => {
             // 1. Pobieranie tokena
             const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
             const tokenRes = await makeHttpsRequest({
-                hostname: 'identity.bitwarden.com',
+                hostname: 'identity.bitwarden.eu',
                 path: '/connect/token',
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -59,7 +59,7 @@ module.exports = async (req, res) => {
 
             // 3. Zapis w Bitwarden
             const cipherOptions = {
-                hostname: 'api.bitwarden.com',
+                hostname: 'api.bitwarden.eu',
                 path: '/ciphers',
                 method: 'POST',
                 headers: {
