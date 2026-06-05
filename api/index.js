@@ -1,30 +1,27 @@
 module.exports = async (req, res) => {
-    // 1. Zezwolenie na komunikację
+    // Nagłówki CORS - kluczowe, by przeglądarka nie blokowała
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
+    // Obsługa "preflight" (zapytania sprawdzającego przeglądarki)
     if (req.method === 'OPTIONS') return res.status(200).end();
 
-    try {
-        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-        const { action, data } = body;
+    // Akceptujemy tylko POST
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: "Backend oczekuje zapytania typu POST." });
+    }
 
-        // Jeśli to zapis danych
-        if (action === "save_cipher") {
-            const response = await fetch('https://api.bitwarden.com/ciphers', {
-                method: 'POST',
-                headers: {
-                    'Authorization': req.headers['authorization'] || '',
-                    'Content-Type': 'application/json',
-                    'Device-Type': '1',
-                    'Bitwarden-Client-Version': '2024.0.0'
-                },
-                body: JSON.stringify(data)
-            });
-            const result = await response.json().catch(() => ({}));
-            return res.status(response.status).json(result);
-        }
+    try {
+        // Parsowanie danych z frontendu
+        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        
+        // Logika serwerowa
+        return res.status(200).json({ status: "SUCCESS", received: body.action || "no_action" });
+    } catch (e) {
+        return res.status(500).json({ error: "Błąd serwera: " + e.message });
+    }
+};
 
         // Domyślna odpowiedź, by aplikacja nie "stała"
         return res.status(200).json({ status: "SUCCESS", message: "Serwer gotowy" });
