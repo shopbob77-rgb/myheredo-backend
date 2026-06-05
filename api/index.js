@@ -18,8 +18,24 @@ function getRequestBody(req) {
     });
 }
 
+// Pomocnicza funkcja do wykonywania żądań HTTPS
+function makeHttpsRequest(options, payload = null) {
+    return new Promise((resolve, reject) => {
+        const req = https.request(options, (res) => {
+            let resBody = '';
+            res.on('data', (chunk) => resBody += chunk);
+            res.on('end', () => {
+                resolve({ statusCode: res.statusCode, body: resBody });
+            });
+        });
+        req.on('error', (err) => reject(err));
+        if (payload) req.write(payload);
+        req.end();
+    });
+}
+
 module.exports = async (req, res) => {
-    // Nagłówki CORS
+    // Wsparcie dla CORS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -46,14 +62,14 @@ module.exports = async (req, res) => {
         const organizationId = process.env.BW_ORGANIZATION_ID;
         const clientId = process.env.BW_CLIENT_ID;
         const clientSecret = process.env.BW_CLIENT_SECRET;
+        const collectionId = "2ea9a78e-cc80-41d9-b92c-b45d01489fe8";
 
         if (!organizationId || !clientId || !clientSecret) {
             return res.status(400).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
         }
 
-        // 1. Autoryzacja w OAuth2 Bitwarden
+        // 1. Logowanie OAuth2 do Bitwarden (Wspólne dla GET i POST)
         const tokenDataString = `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`;
-        
         const tokenOptions = {
             hostname: 'identity.bitwarden.com',
             port: 443,
@@ -65,26 +81,60 @@ module.exports = async (req, res) => {
             }
         };
 
-        const accessToken = await new Promise((resolve, reject) => {
-            const tokenReq = https.request(tokenOptions, (tokenRes) => {
-                let resBody = '';
-                tokenRes.on('data', (chunk) => resBody += chunk);
-                tokenRes.on('end', () => {
-                    try {
-                        const parsed = JSON.parse(resBody);
-                        if (parsed.access_token) resolve(parsed.access_token);
-                        else reject(new Error("Bitwarden odrzucił klucze dostępowe API."));
-                    } catch (e) {
-                        reject(new Error("Błąd autoryzacji tokena."));
-                    }
-                });
-            });
-            tokenReq.on('error', (err) => reject(err));
-            tokenReq.write(tokenDataString);
-            tokenReq.end();
-        });
+        const tokenResult = await makeHttpsRequest(tokenOptions, tokenDataString);
+        const tokenParsed = JSON.parse(tokenResult.body);
+        const accessToken = tokenParsed.access_token;
 
-        // 2. Przygotowanie czystego bloku tekstowego do pola "notes"
+        if (!accessToken) {
+            return res.status(401).json({ success: false, log: "Bitwarden odrzucił dane uwierzytelniające API." });
+        }
+
+        // ==========================================
+        // SYSTEM LOGOWANIA / POBIERANIA (get_vault)
+        // ==========================================
+        if (action === "get_vault") {
+            const getOptions = {
+                hostname: 'api.bitwarden.com',
+                port: 443,
+                path: `/organizations/${organizationId.trim()}/ciphers`,
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            };
+
+            const getResult = await makeHttpsRequest(getOptions);
+            if (getResult.statusCode < 200 || getResult.statusCode >= 300) {
+                return res.status(400).json({ success: false, log: "Nie udało się pobrać zawartości organizacji Bitwarden." });
+            }
+
+            const ciphersParsed = JSON.parse(getResult.body);
+            let extractedVaultData = {};
+
+            // Przeszukujemy elementy w poszukiwaniu najświeższych wpisów MyHeredo
+            if (ciphersParsed.data && Array.isArray(ciphersParsed.data)) {
+                const myHeredoCiphers = ciphersParsed.data.filter(item => 
+                    item.name && item.name.includes("MyHeredo") && item.notes
+                );
+
+                // Szukamy zapisanego stanu struktury sejfu w polu notes
+                for (const cipher of myHeredoCiphers) {
+                    if (cipher.notes.includes("[DANE SEJFU]:")) {
+                        try {
+                            const jsonPart = cipher.notes.split("[DANE SEJFU]:")[1].trim();
+                            extractedVaultData = JSON.parse(jsonPart);
+                            break; // Znaleziono najnowszą strukturę skrytki
+                        } catch (e) {
+                            // Ignoruj błędy parsowania pojedynczego wpisu, szukaj dalej
+                        }
+                    }
+                }
+            }
+
+            return res.status(200).json({ success: true, vaultData: extractedVaultData });
+        }
+
+        // ==========================================
+        // SYSTEM ZAPISU (activate_dms / update_category)
+        // ==========================================
         let secureContent = `--- PROTOKÓŁ SYSTEMU MYHEREDO ---\n`;
         secureContent += `Wygenerowano: ${new Date().toLocaleString('pl-PL')}\n`;
         secureContent += `Typ akcji: ${action || 'Zapis ręczny'}\n`;
@@ -100,18 +150,16 @@ module.exports = async (req, res) => {
 
         const itemTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
 
-        // 3. Prosty, niezawodny payload dla bezpiecznej notatki bez sekcji fields
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
-            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"],
+            collectionIds: [collectionId],
             type: 2, // Secure Note
             name: itemTitle,
             notes: secureContent,
             secureNote: { type: 0 }
         });
 
-        // 4. Wysłanie żądania utworzenia wpisu do chmury
         const cipherOptions = {
             hostname: 'api.bitwarden.com',
             port: 443,
@@ -124,34 +172,15 @@ module.exports = async (req, res) => {
             }
         };
 
-        const result = await new Promise((resolve) => {
-            const cipherReq = https.request(cipherOptions, (cipherRes) => {
-                let cipherBody = '';
-                cipherRes.on('data', (chunk) => cipherBody += chunk);
-                cipherRes.on('end', () => {
-                    if (cipherRes.statusCode >= 200 && cipherRes.statusCode < 300) {
-                        resolve({ success: true, status: 200, log: "Sukces! Protokół został poprawnie zapisany." });
-                    } else {
-                        resolve({ 
-                            success: false, 
-                            status: cipherRes.statusCode,
-                            log: `Bitwarden API odrzucił strukturę. Kod statusu: ${cipherRes.statusCode}` 
-                        });
-                    }
-                });
-            });
-            cipherReq.on('error', (err) => resolve({ success: false, status: 500, log: `Błąd połączenia: ${err.message}` }));
-            cipherReq.write(payloadCipher);
-            cipherReq.end();
-        });
+        const postResult = await makeHttpsRequest(cipherOptions, payloadCipher);
 
-        if (result.success) {
-            return res.status(200).json(result);
+        if (postResult.statusCode >= 200 && postResult.statusCode < 300) {
+            return res.status(200).json({ success: true, log: "Sukces! Dane zapisane w organizacji Bitwarden." });
         } else {
-            return res.status(400).json(result);
+            return res.status(400).json({ success: false, log: `Bitwarden API odrzucił strukturę. Status: ${postResult.statusCode}` });
         }
 
     } catch (globalError) {
-        return res.status(500).json({ success: false, log: `Błąd wewnętrzny: ${globalError.message}` });
+        return res.status(500).json({ success: false, log: `Błąd wewnętrzny serwera: ${globalError.message}` });
     }
 };
