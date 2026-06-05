@@ -53,7 +53,7 @@ app.post('/api', async (req, res) => {
         // 🛡️ OBSŁUGA STRATEGII 2: ZAPIS I AKTYWACJA PROTOKOŁU (DMS / UPDATE)
         // ==========================================
         
-        // 1. Logowanie do Bitwarden (Pobieranie tokenu dostępowego OAuth2 dla organizacji)
+       // 1. Logowanie do Bitwarden (Pobieranie tokenu dostępowego OAuth2 dla organizacji)
         const tokenResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -80,15 +80,21 @@ app.post('/api', async (req, res) => {
             finalContent = `Aktualizacja skrytki MyHeredo - Brak dodatkowej zawartości tekstowej.`;
         }
 
-       // 3. Budowanie payloadu dla bezpiecznego obiektu kolekcji (Cipher typu Secure Note)
+        // 3. Prawidłowy, zagnieżdżony payload akceptowany przez API Bitwarden
         const payloadCipher = {
             organizationId: organizationId.trim(),
-            type: 2, 
-            name: `MyHeredo - Protokół (${action || 'Sync'}) - ${new Date().toLocaleDateString('pl-PL')}`,
-            notes: finalContent,
             folderId: null,
-            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"] // <--- DOKŁADNIE TA WARTOŚĆ
+            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"], // Twój zweryfikowany ID kolekcji
+            type: 2, // 2 = Secure Note (Bezpieczna Notatka)
+            name: `MyHeredo - Protokół (${action || 'Sync'}) - ${new Date().toLocaleDateString('pl-PL')}`,
+            notes: null, // API organizacji wymaga, aby pole notatek w głównym obiekcie pozostało puste...
+            secureNote: {
+                type: 0 // ...a właściwa treść notatki musi lądować w zagnieżdżonym podgrupowaniu strukturalnym
+            }
         };
+
+        // Nadpisujemy pole notes w wymagany sposób dla poprawnego parsowania JSON przez Bitwarden
+        payloadCipher.notes = finalContent;
 
         // 4. Wywołanie żądania zapisu bezpośrednio do zasobów sejfu chmury Bitwarden
         const cipherResponse = await fetch('https://api.bitwarden.com/ciphers', {
@@ -107,7 +113,6 @@ app.post('/api', async (req, res) => {
             console.error("Szczegóły odrzucenia przez API Bitwarden:", cipherErr);
             return res.status(500).json({ error: "Chmura Bitwarden odrzuciła strukturę zapisu notatki.", details: cipherErr });
         }
-
     } catch (error) {
         console.error("Wewnętrzny krytyczny błąd serwera:", error);
         return res.status(500).json({ error: "Wewnętrzny błąd serwera podczas przetwarzania żądania." });
