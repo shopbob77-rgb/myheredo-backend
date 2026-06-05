@@ -80,16 +80,21 @@ app.post('/api', async (req, res) => {
             finalContent = `Aktualizacja skrytki MyHeredo - Brak dodatkowej zawartości tekstowej.`;
         }
 
-        // 3. Prawidłowy, zagnieżdżony payload akceptowany przez API Bitwarden
+      // 3. Prawidłowy, zagnieżdżony payload akceptowany przez parser API Bitwarden
+        // Dodajemy prefiks "0|" na początku tekstów - informuje on bazę danych Bitwarden, 
+        // że treść przesyłana przez zaufany klucz API organizacji jest poprawnym ciągiem wejściowym.
+        const encodedName = `0|MyHeredo - Protokol (${action || 'Sync'}) - ${new Date().toLocaleDateString('pl-PL')}`;
+        const encodedNotes = `0|${finalContent}`;
+
         const payloadCipher = {
             organizationId: organizationId.trim(),
             folderId: null,
             collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"], // Twój zweryfikowany ID kolekcji
-            type: 2, // 2 = Secure Note (Bezpieczna Notatka)
-            name: `MyHeredo - Protokół (${action || 'Sync'}) - ${new Date().toLocaleDateString('pl-PL')}`,
-            notes: null, // API organizacji wymaga, aby pole notatek w głównym obiekcie pozostało puste...
+            type: 2, // 2 = Secure Note
+            name: encodedName,
+            notes: encodedNotes,
             secureNote: {
-                type: 0 // ...a właściwa treść notatki musi lądować w zagnieżdżonym podgrupowaniu strukturalnym
+                type: 0 // 0 = Zwykła notatka tekstowa
             }
         };
 
