@@ -35,7 +35,7 @@ function makeHttpsRequest(options, payload = null) {
 }
 
 module.exports = async (req, res) => {
-    // Wsparcie dla CORS
+    // Wsparcie dla CORS (zapobiega błędom sieciowym w przeglądarce)
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -154,7 +154,7 @@ module.exports = async (req, res) => {
             organizationId: organizationId.trim(),
             folderId: null,
             collectionIds: [collectionId],
-            type: 2, // Secure Note
+            type: 2, // Secure Note (Bezpieczna Notatka)
             name: itemTitle,
             notes: secureContent,
             secureNote: { type: 0 }
