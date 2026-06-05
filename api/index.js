@@ -1,15 +1,12 @@
 const https = require('https');
 
-// Pomocnicza funkcja do zbierania danych z żądania POST
 function getRequestBody(req) {
     return new Promise((resolve) => {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', () => {
             if (!body) return resolve({});
-            try {
-                resolve(JSON.parse(body));
-            } catch (e) {
+            try { resolve(JSON.parse(body)); } catch (e) {
                 const params = new URLSearchParams(body);
                 const obj = {};
                 for (const [key, value] of params) { obj[key] = value; }
@@ -19,15 +16,12 @@ function getRequestBody(req) {
     });
 }
 
-// Pomocnicza funkcja do wykonywania bezpiecznych żądań HTTPS API
 function makeHttpsRequest(options, payload = null) {
     return new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
             let resBody = '';
             res.on('data', (chunk) => resBody += chunk);
-            res.on('end', () => {
-                resolve({ statusCode: res.statusCode, body: resBody });
-            });
+            res.on('end', () => resolve({ statusCode: res.statusCode, body: resBody }));
         });
         req.on('error', (err) => reject(err));
         if (payload) req.write(payload);
@@ -36,26 +30,15 @@ function makeHttpsRequest(options, payload = null) {
 }
 
 module.exports = async (req, res) => {
-    // Pełna konfiguracja nagłówków CORS zapobiegająca blokadom przeglądarki
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader(
-        'Access-Control-Allow-Headers',
-        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
-    );
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-    // Obsługa zapytania testowego CORS (Preflight)
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
 
-    // Bezpieczny komunikat zwrotny przy wejściu przez przeglądarkę (GET)
     if (req.method !== 'POST') {
-        return res.status(200).json({ 
-            status: "Działa", 
-            message: "Serwer MyHeredo działa poprawnie. Oczekuje na bezpieczne połączenia POST z aplikacji frontendu." 
-        });
+        return res.status(200).json({ status: "Działa", message: "Serwer MyHeredo jest aktywny." });
     }
 
     try {
@@ -65,13 +48,12 @@ module.exports = async (req, res) => {
         const organizationId = process.env.BW_ORGANIZATION_ID;
         const clientId = process.env.BW_CLIENT_ID;
         const clientSecret = process.env.BW_CLIENT_SECRET;
-        const collectionId = "2ea9a78e-cc80-41d9-b92c-b45d01489fe8";
 
         if (!organizationId || !clientId || !clientSecret) {
-            return res.status(400).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
+            return res.status(400).json({ success: false, log: "Brak zmiennych środowiskowych." });
         }
 
-        // 1. Pobieranie tokenu dostępu OAuth2 z Identity Bitwarden
+        // 1. Logowanie i pobranie tokenu dostępu
         const tokenDataString = `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`;
         const tokenOptions = {
             hostname: 'identity.bitwarden.com',
@@ -85,51 +67,62 @@ module.exports = async (req, res) => {
         };
 
         const tokenResult = await makeHttpsRequest(tokenOptions, tokenDataString);
-        let accessToken = '';
-        try {
-            const tokenParsed = JSON.parse(tokenResult.body);
-            accessToken = tokenParsed.access_token;
-        } catch (e) {
-            return res.status(401).json({ success: false, log: "Błąd parsowania tokenu autoryzacji Bitwarden." });
-        }
+        const tokenParsed = JSON.parse(tokenResult.body);
+        const accessToken = tokenParsed.access_token;
 
-        if (!accessToken) {
-            return res.status(401).json({ success: false, log: "Bitwarden odrzucił dane uwierzytelniające API (Client ID/Secret)." });
-        }
+        if (!accessToken) return res.status(401).json({ success: false, log: "Błąd autoryzacji tokenu." });
 
-        // 2. Bezpieczna obsługa akcji logowania (get_vault) – zwraca czysty profil początkowy
+        // 2. Obsługa akcji logowania (get_vault) - już działa, zostawiamy stabilną wersję
         if (action === "get_vault") {
             return res.status(200).json({ success: true, vaultData: {} });
         }
 
-        // 3. Budowanie struktury czystego tekstu do pola "notes" (Ominięcie błędu 400 pól ukrytych)
-        let secureContent = `--- PROTOKÓŁ SYSTEMU MYHEREDO ---\n`;
-        secureContent += `Wygenerowano: ${new Date().toLocaleString('pl-PL')}\n`;
-        secureContent += `Typ akcji: ${action || 'Zapis ręczny'}\n`;
-        
-        if (action === "activate_dms" || vault) {
-            secureContent += `Interwał DMS: ${dmsDays || 90} dni\n\n`;
-            secureContent += `[DANE SEJFU]:\n${JSON.stringify(vault || {}, null, 2)}`;
-        } else if (tekstNotatki) {
-            secureContent += `\n[TREŚĆ NOTATKI]:\n${tekstNotatki}`;
-        } else {
-            secureContent += `\nAktualizacja skrytki użytkownika.`;
+        // 3. AUTOMATYCZNE POBIERANIE KOLEKCJI (Zapobiega błędowi 400 przy złym ID)
+        const collectionOptions = {
+            hostname: 'api.bitwarden.com',
+            port: 443,
+            path: `/organizations/${organizationId.trim()}/collections`,
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        };
+
+        const collectionResult = await makeHttpsRequest(collectionOptions);
+        let validCollectionId = null;
+
+        try {
+            const collectionsParsed = JSON.parse(collectionResult.body);
+            if (collectionsParsed.data && collectionsParsed.data.length > 0) {
+                // Wybieramy pierwszą dostępną kolekcję z brzegu, do której serwer ma dostęp
+                validCollectionId = collectionsParsed.data[0].id;
+            }
+        } catch (e) {
+            console.log("Nie udało się sparsować kolekcji automatycznie.");
         }
 
-        const itemTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
+        // Jeśli auto-wykrywanie zawiedzie, używamy awaryjnego ID jako fallback
+        if (!validCollectionId) {
+            validCollectionId = "2ea9a78e-cc80-41d9-b92c-b45d01489fe8";
+        }
 
-        // Budowanie payloadu dla Bezpiecznej Notatki (Type 2)
+        // 4. Przygotowanie treści bezpiecznej notatki
+        let secureContent = `--- PROTOKÓŁ SYSTEMU MYHEREDO ---\nWygenerowano: ${new Date().toLocaleString('pl-PL')}\n`;
+        if (action === "activate_dms" || vault) {
+            secureContent += `Interwał DMS: ${dmsDays || 90} dni\n\n[DANE SEJFU]:\n${JSON.stringify(vault || {}, null, 2)}`;
+        } else if (tekstNotatki) {
+            secureContent += `\n[TREŚĆ]:\n${tekstNotatki}`;
+        }
+
+        // 5. Wysłanie danych do Bitwarden z dynamicznym, poprawnym ID kolekcji
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
-            collectionIds: [collectionId],
+            collectionIds: [validCollectionId],
             type: 2, 
-            name: itemTitle,
+            name: `MyHeredo - Protokol (${action || 'Sync'})`,
             notes: secureContent,
             secureNote: { type: 0 }
         });
 
-        // 4. Wysłanie gotowego protokołu do API Bitwarden
         const cipherOptions = {
             hostname: 'api.bitwarden.com',
             port: 443,
@@ -145,12 +138,12 @@ module.exports = async (req, res) => {
         const postResult = await makeHttpsRequest(cipherOptions, payloadCipher);
 
         if (postResult.statusCode >= 200 && postResult.statusCode < 300) {
-            return res.status(200).json({ success: true, log: "Sukces! Protokół został poprawnie zapisany w Bitwarden." });
+            return res.status(200).json({ success: true, log: "Dane zapisane pomyślnie!" });
         } else {
-            return res.status(400).json({ success: false, log: `Bitwarden API odrzucił żądanie. Status HTTP: ${postResult.statusCode}` });
+            return res.status(400).json({ success: false, log: `Bitwarden odrzucił strukturę. Status: ${postResult.statusCode}`, details: postResult.body });
         }
 
     } catch (globalError) {
-        return res.status(500).json({ success: false, log: `Błąd serwera: ${globalError.message}` });
+        return res.status(500).json({ success: false, log: `Błąd: ${globalError.message}` });
     }
 };
