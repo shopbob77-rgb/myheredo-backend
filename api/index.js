@@ -1,22 +1,37 @@
 module.exports = async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    
-    // Jeśli to widzisz, wiemy że serwer żyje
-    console.log("DEBUG: Funkcja działa przed logiką Bitwardena");
-    
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Content-Type', 'application/json');
+
+    if (req.method === 'OPTIONS') return res.status(200).end();
+
     try {
-        // Zamiast łączyć się z Bitwardenem, symulujemy jego odpowiedź
-        // To pozwoli sprawdzić, czy aplikacja "przejdzie dalej"
-        const mockResponse = {
-            status: 200,
-            message: "Symulacja zapisu do Bitwarden udana"
-        };
+        const body = await new Promise(resolve => {
+            let data = '';
+            req.on('data', chunk => data += chunk);
+            req.on('end', () => resolve(JSON.parse(data || '{}')));
+        });
+
+        // Używamy natywnego fetch, który jest stabilny w Vercel
+        const response = await fetch('https://api.bitwarden.com/ciphers', {
+            method: 'POST',
+            headers: {
+                'Authorization': req.headers['authorization'],
+                'Content-Type': 'application/json',
+                'Device-Type': '1',
+                'Bitwarden-Client-Version': '2024.0.0',
+                'Device-Identifier': '00000000-0000-0000-0000-000000000000'
+            },
+            body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
         
-        console.log("DEBUG: Symulacja zakończona sukcesem");
-        return res.status(200).json(mockResponse);
-        
-    } catch (e) {
-        console.error("DEBUG: Błąd w logice:", e);
-        return res.status(500).json({ error: "Błąd serwera" });
+        // Zwracamy wynik z Bitwarden bezpośrednio do frontendu
+        return res.status(response.status).json(data);
+
+    } catch (error) {
+        console.error("Błąd połączenia z Bitwarden:", error);
+        return res.status(500).json({ error: "Nie udało się połączyć z Bitwarden", details: error.message });
     }
 };
