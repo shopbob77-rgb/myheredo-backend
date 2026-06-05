@@ -184,3 +184,25 @@ module.exports = async (req, res) => {
         return res.status(500).json({ success: false, log: `Błąd wewnętrzny serwera: ${globalError.message}` });
     }
 };
+            port: 443,
+            path: '/ciphers',
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payloadCipher)
+            }
+        };
+
+        const postResult = await makeHttpsRequest(cipherOptions, payloadCipher);
+
+        if (postResult.statusCode >= 200 && postResult.statusCode < 300) {
+            return res.status(200).json({ success: true, log: "Sukces! Dane zapisane w organizacji Bitwarden." });
+        } else {
+            return res.status(400).json({ success: false, log: `Bitwarden API odrzucił strukturę. Status: ${postResult.statusCode}` });
+        }
+
+    } catch (globalError) {
+        return res.status(500).json({ success: false, log: `Błąd wewnętrzny serwera: ${globalError.message}` });
+    }
+};
