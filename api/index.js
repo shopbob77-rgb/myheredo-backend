@@ -12,13 +12,14 @@ module.exports = async (req, res) => {
     // 2. Bardzo proste zapytanie o token
     const data = `grant_type=client_credentials&client_id=${id}&client_secret=${secret}&scope=api`;
     
-    const options = {
-        hostname: 'identity.bitwarden.com',
-        path: '/connect/token',
+  const options = {
+        hostname: 'api.bitwarden.com', // lub identity.bitwarden.com zależnie od wywołania
+        path: '/ciphers', // lub /connect/token
         method: 'POST',
         headers: { 
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Bitwarden-Client-Version': '2024.0.0' 
+            'Content-Type': 'application/json', // lub application/x-www-form-urlencoded
+            'Device-Type': '1',                // <--- TO JEST KLUCZOWE
+            'Bitwarden-Client-Version': '2024.0.0' // <--- TO JEST KLUCZOWE
         }
     };
 
