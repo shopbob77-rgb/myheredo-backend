@@ -1,44 +1,22 @@
-const https = require('https');
-
 module.exports = async (req, res) => {
-    // Nagłówki CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Bitwarden-Client-Version');
-
-    if (req.method === 'OPTIONS') return res.status(200).end();
-
-    // Pobranie ciała zapytania
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', async () => {
-        const payload = body ? JSON.parse(body) : {};
-
-        // Przekazanie zapytania do Bitwarden z wymaganymi nagłówkami
-        const options = {
-            hostname: 'api.bitwarden.com',
-            path: '/ciphers', // lub /sync, zależnie od akcji
-            method: 'POST',
-            headers: {
-                'Authorization': req.headers['authorization'],
-                'Content-Type': 'application/json',
-                'Device-Type': '1', // Bitwarden widzi to jako aplikację Desktop
-                'Bitwarden-Client-Version': '2024.0.0', // Wymagane przez API
-                'Content-Length': Buffer.byteLength(JSON.stringify(payload))
-            }
+    
+    // Jeśli to widzisz, wiemy że serwer żyje
+    console.log("DEBUG: Funkcja działa przed logiką Bitwardena");
+    
+    try {
+        // Zamiast łączyć się z Bitwardenem, symulujemy jego odpowiedź
+        // To pozwoli sprawdzić, czy aplikacja "przejdzie dalej"
+        const mockResponse = {
+            status: 200,
+            message: "Symulacja zapisu do Bitwarden udana"
         };
-
-        const proxy = https.request(options, (proxyRes) => {
-            let data = '';
-            proxyRes.on('data', chunk => data += chunk);
-            proxyRes.on('end', () => {
-                // Jeśli Bitwarden odrzuci, dostaniemy tu status błędu (np. 401, 400)
-                res.status(proxyRes.statusCode).json(JSON.parse(data || '{}'));
-            });
-        });
-
-        proxy.on('error', (err) => res.status(500).json({ error: err.message }));
-        proxy.write(JSON.stringify(payload));
-        proxy.end();
-    });
+        
+        console.log("DEBUG: Symulacja zakończona sukcesem");
+        return res.status(200).json(mockResponse);
+        
+    } catch (e) {
+        console.error("DEBUG: Błąd w logice:", e);
+        return res.status(500).json({ error: "Błąd serwera" });
+    }
 };
