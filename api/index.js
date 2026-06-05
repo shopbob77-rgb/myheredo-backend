@@ -1,40 +1,42 @@
 const https = require('https');
 
-// Funkcja, która "udaje" pełnoprawnego klienta Bitwardena
-const requestBitwarden = (path, method, token, payload = null) => {
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: 'api.bitwarden.com',
-            path: path,
-            method: method,
-            headers: {
-                'Authorization': token ? `Bearer ${token}` : undefined,
-                'Content-Type': 'application/json',
-                'Device-Type': '1', // Bitwarden widzi nas jako aplikację Desktop
-                'Bitwarden-Client-Version': '2024.0.0', // Wersja, którą API akceptuje
-                'Content-Length': payload ? Buffer.byteLength(payload) : 0
-            }
-        };
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', (c) => data += c);
-            res.on('end', () => resolve({ status: res.statusCode, data }));
-        });
-        req.on('error', reject);
-        if (payload) req.write(payload);
-        req.end();
-    });
-};
-
 module.exports = async (req, res) => {
-    // Standardowe CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
-    if (req.method === 'POST') {
-         // Tutaj logika autoryzacji...
-         // Jeśli to zadziała, po prostu zobaczysz "Success" w przeglądarce
-         res.status(200).json({ message: "Konfiguracja w końcu zrozumiała protokół!" });
-    }
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Bitwarden-Client-Version');
+
+    if (req.method === 'OPTIONS') return res.status(200).end();
+
+    const body = await new Promise(resolve => {
+        let data = '';
+        req.on('data', chunk => data += chunk);
+        req.on('end', () => resolve(JSON.parse(data || '{}')));
+    });
+
+    // Bitwarden wymaga unikalnego identyfikatora urządzenia dla sesji API
+    const DEVICE_ID = "00000000-0000-0000-0000-000000000000"; 
+
+    // Konfiguracja zapytania
+    const options = {
+        hostname: 'api.bitwarden.com',
+        path: '/ciphers',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Device-Type': '1',
+            'Device-Identifier': DEVICE_ID,
+            'Bitwarden-Client-Version': '2024.0.0',
+            'Authorization': req.headers['authorization'] // Przekazujemy token z frontendu
+        }
+    };
+
+    const proxyReq = https.request(options, (proxyRes) => {
+        let responseData = '';
+        proxyRes.on('data', chunk => responseData += chunk);
+        proxyRes.on('end', () => {
+            res.status(proxyRes.statusCode).json(JSON.parse(responseData || '{}'));
+        });
+    });
+
+    proxyReq.write(JSON.stringify(body));
+    proxyReq.end();
 };
