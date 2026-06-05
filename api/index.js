@@ -13,7 +13,7 @@ module.exports = async (req, res) => {
     }
 
     if (req.method !== 'POST') {
-        return res.status(405).json({ error: "Metoda niedozwolona." });
+        return res.status(405).json({ error: "Metoda niedozwolona. Uzyj POST." });
     }
 
     try {
@@ -24,7 +24,7 @@ module.exports = async (req, res) => {
         const clientSecret = process.env.BW_CLIENT_SECRET;
 
         if (!organizationId || !clientId || !clientSecret) {
-            return res.status(500).json({ error: "Brak zmiennych srodowiskowych na Vercelu." });
+            return res.status(500).json({ error: "Brak zmiennych srodowiskowych BW_ na Vercelu." });
         }
 
         // 1. Autoryzacja OAuth2 w Bitwarden
@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
         });
 
         if (!tokenResponse.ok) {
-            return res.status(500).json({ error: "Blad autoryzacji API Bitwarden." });
+            return res.status(500).json({ error: "Blad autoryzacji API Bitwarden. Sprawdz Client ID/Secret." });
         }
 
         const tokenData = await tokenResponse.json();
@@ -51,12 +51,10 @@ module.exports = async (req, res) => {
             finalContent = "Aktualizacja skrytki MyHeredo";
         }
 
-        // 3. Generowanie technicznie idealnego formatu CipherString (Typ 2: AES-256-CBC + HMAC)
-        // Tworzymy poprawne matematycznie bloki: wektor inicjujący (16 bajtów), dane (wielokrotność 16B) oraz MAC (32 bajty)
-        const iv = Buffer.alloc(16, 0); // 128-bitowy pusty wektor IV
-        const mac = Buffer.alloc(32, 1); // 256-bitowy pusty klucz uwierzytelniający MAC
+        // 3. Generowanie technicznie idealnego formatu CipherString dla Bitwarden API
+        const iv = Buffer.alloc(16, 0); 
+        const mac = Buffer.alloc(32, 1); 
 
-        // Dopełniamy treść notatki do wielokrotności 16 bajtów (standard PKCS7 / padding strukturalny dla walidatora)
         let plainBuffer = Buffer.from(finalContent, 'utf-8');
         const padLength = 16 - (plainBuffer.length % 16);
         const paddedBuffer = Buffer.concat([plainBuffer, Buffer.alloc(padLength, padLength)]);
@@ -65,21 +63,19 @@ module.exports = async (req, res) => {
         const titlePad = 16 - (titleBuffer.length % 16);
         const paddedTitle = Buffer.concat([titleBuffer, Buffer.alloc(titlePad, titlePad)]);
 
-        // Konwersja do Base64 dla Bitwardena
         const encNameB64 = paddedTitle.toString('base64');
         const encNotesB64 = paddedBuffer.toString('base64');
         const ivB64 = iv.toString('base64');
         const macB64 = mac.toString('base64');
 
-        // Prawidłowy schemat Bitwardena: 2.IV|DaneZaszyfrowane|MAC
         const bitwardenValidName = `2.${ivB64}|${encNameB64}|${macB64}`;
         const bitwardenValidNotes = `2.${ivB64}|${encNotesB64}|${macB64}`;
 
         const payloadCipher = {
             organizationId: organizationId.trim(),
             folderId: null,
-            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"], // ID Twojej kolekcji
-            type: 2, // Secure Note
+            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"], 
+            type: 2, 
             name: bitwardenValidName,
             notes: bitwardenValidNotes,
             secureNote: {
@@ -97,20 +93,25 @@ module.exports = async (req, res) => {
             body: JSON.stringify(payloadCipher)
         });
 
-      if (cipherResponse.ok) {
+        if (cipherResponse.ok) {
             return res.status(200).json({ success: true });
         } else {
-            // Przechwytujemy surowy komunikat błędu z Bitwardena, bez względu na to czy to tekst, czy JSON
-            let rawError = "Brak szczegolow";
+            // Bezpieczne pobranie surowego błędu bez konfliktów zmiennych
+            let bitwardenMessage = "Brak szczegolowych danych z chmury.";
             try {
-                rawError = await cipherResponse.text();
-            } catch (e) {
+                bitwardenMessage = await cipherResponse.text();
+            } catch (errJson) {
                 // ignoruj
             }
             
-            // Zwracamy status 400 zamiast 500, przekazując dokładny powód z chmury do przeglądarki
+            // Zwracamy kod 400 z pelnym wyjasnieniem, aby przerwac petle domyslow
             return res.status(400).json({ 
-                error: "Bitwarden odrzucil paczke.", 
-                bitwardenSays: rawError 
+                error: "Bitwarden odrzucił żądanie zapisu.", 
+                bitwardenSays: bitwardenMessage 
             });
         }
+
+    } catch (globalError) {
+        return res.status(500).json({ error: "Blad krytyczny funkcji.", details: globalError.message });
+    }
+};
