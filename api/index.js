@@ -32,7 +32,6 @@ module.exports = async (req, res) => {
         return res.status(200).end();
     }
 
-    // Jeśli użytkownik wejdzie przez przeglądarkę (GET) - wyświetlamy ładny komunikat zamiast surowego błędu
     if (req.method !== 'POST') {
         return res.status(200).json({ 
             status: "Działa", 
@@ -52,7 +51,7 @@ module.exports = async (req, res) => {
             return res.status(400).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
         }
 
-        // 1. Logowanie do OAuth2 Bitwarden
+        // 1. Autoryzacja w OAuth2 Bitwarden
         const tokenDataString = `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`;
         
         const tokenOptions = {
@@ -85,37 +84,34 @@ module.exports = async (req, res) => {
             tokenReq.end();
         });
 
-        // 2. Przygotowanie danych tekstowych
-        let finalContent = "";
+        // 2. Przygotowanie czystego bloku tekstowego do pola "notes"
+        let secureContent = `--- PROTOKÓŁ SYSTEMU MYHEREDO ---\n`;
+        secureContent += `Wygenerowano: ${new Date().toLocaleString('pl-PL')}\n`;
+        secureContent += `Typ akcji: ${action || 'Zapis ręczny'}\n`;
+        
         if (action === "activate_dms" || vault) {
-            finalContent = `Interwał: ${dmsDays || 90} dni. Dane skrytki: ${JSON.stringify(vault || {})}`;
+            secureContent += `Interwał DMS: ${dmsDays || 90} dni\n\n`;
+            secureContent += `[DANE SEJFU]:\n${JSON.stringify(vault || {}, null, 2)}`;
         } else if (tekstNotatki) {
-            finalContent = tekstNotatki;
+            secureContent += `\n[TREŚĆ NOTATKI]:\n${tekstNotatki}`;
         } else {
-            finalContent = "Aktualizacja skrytki MyHeredo";
+            secureContent += `\nAktualizacja skrytki użytkownika.`;
         }
 
         const itemTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
 
-        // 3. Budowanie struktury Fields akceptowanej przez Organizacje
+        // 3. Prosty, niezawodny payload dla bezpiecznej notatki bez sekcji fields
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
             collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"],
-            type: 2, 
+            type: 2, // Secure Note
             name: itemTitle,
-            notes: `Zaszyfrowano protokołem MyHeredo. Wygenerowano: ${new Date().toLocaleString('pl-PL')}`,
-            fields: [
-                {
-                    name: "Dane Logu",
-                    value: finalContent,
-                    type: 1 
-                }
-            ],
+            notes: secureContent,
             secureNote: { type: 0 }
         });
 
-        // 4. Wysłanie żądania utworzenia wpisu
+        // 4. Wysłanie żądania utworzenia wpisu do chmury
         const cipherOptions = {
             hostname: 'api.bitwarden.com',
             port: 443,
@@ -133,14 +129,13 @@ module.exports = async (req, res) => {
                 let cipherBody = '';
                 cipherRes.on('data', (chunk) => cipherBody += chunk);
                 cipherRes.on('end', () => {
-                    // Zwracamy status HTTP odpowiadający sukcesowi (200/201)
                     if (cipherRes.statusCode >= 200 && cipherRes.statusCode < 300) {
-                        resolve({ success: true, status: 200, log: "Sukces! Protokół został poprawnie zapisany w Bitwarden." });
+                        resolve({ success: true, status: 200, log: "Sukces! Protokół został poprawnie zapisany." });
                     } else {
                         resolve({ 
                             success: false, 
                             status: cipherRes.statusCode,
-                            log: `Bitwarden API zwrócił status: ${cipherRes.statusCode}.` 
+                            log: `Bitwarden API odrzucił strukturę. Kod statusu: ${cipherRes.statusCode}` 
                         });
                     }
                 });
@@ -150,7 +145,6 @@ module.exports = async (req, res) => {
             cipherReq.end();
         });
 
-        // Dostosowanie statusu odpowiedzi do wyniku operacji w Bitwardenie
         if (result.success) {
             return res.status(200).json(result);
         } else {
