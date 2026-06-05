@@ -1,7 +1,7 @@
 const https = require('https');
 
 module.exports = async (req, res) => {
-    // 1. Obsługa nagłówków CORS
+    // 1. Pełne nagłówki CORS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -14,8 +14,9 @@ module.exports = async (req, res) => {
         return res.status(200).end();
     }
 
+    // Akceptujemy zapytania POST pod każdy wariant adresu URL
     if (req.method !== 'POST') {
-        return res.status(405).json({ error: "Metoda niedozwolona." });
+        return res.status(200).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
     }
 
     try {
@@ -29,12 +30,12 @@ module.exports = async (req, res) => {
             return res.status(200).json({ success: false, log: "Brak zmiennych srodowiskowych BW_ na Vercelu." });
         }
 
-        // 2. KROK 1: Logowanie do Bitwarden przez OAuth2 (Natywny HTTPS POST)
+        // 2. KROK 1: Autoryzacja OAuth2 w Bitwarden (Port 443 - Standard HTTPS)
         const tokenDataString = `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`;
         
         const tokenOptions = {
             hostname: 'identity.bitwarden.com',
-            port: 444,
+            port: 443, 
             path: '/connect/token',
             method: 'POST',
             headers: {
@@ -51,9 +52,9 @@ module.exports = async (req, res) => {
                     try {
                         const parsed = JSON.parse(body);
                         if (parsed.access_token) resolve(parsed.access_token);
-                        else reject(new Error("Brak tokena w odpowiedzi"));
+                        else reject(new Error("Bitwarden odrzucil klucze Client ID / Secret."));
                     } catch (e) {
-                        reject(new Error("Blad parsowania tokena"));
+                        reject(new Error("Blad parsowania odpowiedzi autoryzacji."));
                     }
                 });
             });
@@ -62,7 +63,7 @@ module.exports = async (req, res) => {
             tokenReq.end();
         });
 
-        // 3. Przygotowanie zawartości do wysłania
+        // 3. Przygotowanie tresci
         let finalContent = "";
         if (action === "activate_dms" || vault) {
             finalContent = `--- SYSTEM SUKCESJI ACTIVE ---\nData: ${new Date().toLocaleString('pl-PL')}\nInterwal: ${dmsDays || 90} dni\n\nPayload:\n${JSON.stringify(vault || {}, null, 2)}`;
@@ -72,7 +73,7 @@ module.exports = async (req, res) => {
             finalContent = "Aktualizacja skrytki MyHeredo";
         }
 
-        // 4. Formatowanie CipherString dla Bitwardena
+        // 4. Formatowanie CipherString
         const cleanTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
         const base64Title = Buffer.from(cleanTitle).toString('base64');
         const base64Notes = Buffer.from(finalContent).toString('base64');
@@ -83,17 +84,17 @@ module.exports = async (req, res) => {
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
-            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"],
+            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"], // ID Twojej kolekcji
             type: 2,
             name: bitwardenName,
             notes: bitwardenNotes,
             secureNote: { type: 0 }
         });
 
-        // 5. KROK 2: Wysłanie rekordu do Bitwarden API
+        // 5. KROK 2: Wysylanie rekordu do Bitwarden API (Port 443 - Standard HTTPS)
         const cipherOptions = {
             hostname: 'api.bitwarden.com',
-            port: 444,
+            port: 443, 
             path: '/ciphers',
             method: 'POST',
             headers: {
@@ -109,13 +110,13 @@ module.exports = async (req, res) => {
                 cipherRes.on('data', (chunk) => body += chunk);
                 cipherRes.on('end', () => {
                     if (cipherRes.statusCode >= 200 && cipherRes.statusCode < 300) {
-                        resolve({ success: true, log: "Zapisano w Bitwarden!" });
+                        resolve({ success: true, log: "Sukces! Zapisano w Bitwarden." });
                     } else {
-                        resolve({ success: false, log: `Bitwarden API zwrocil status błędu: ${cipherRes.statusCode}. Sprawdz ID kolekcji.` });
+                        resolve({ success: false, log: `Bitwarden API zwrocil status: ${cipherRes.statusCode}. Sprawdz czy ID kolekcji jest poprawne.` });
                     }
                 });
             });
-            cipherReq.on('error', (err) => resolve({ success: false, log: `Blad sieci: ${err.message}` }));
+            cipherReq.on('error', (err) => resolve({ success: false, log: `Blad sieci API: ${err.message}` }));
             cipherReq.write(payloadCipher);
             cipherReq.end();
         });
@@ -123,7 +124,7 @@ module.exports = async (req, res) => {
         return res.status(200).json(result);
 
     } catch (globalError) {
-        // Blok całkowicie eliminujący crash (zawsze zwraca czysty JSON 200)
-        return res.status(200).json({ success: false, log: `Blad wewnetrzny: ${globalError.message}` });
+        // Pelne wygaszenie bledow 500 - serwer zawsze odpowiada strukturalnie
+        return res.status(200).json({ success: false, log: `Blad przetwarzania: ${globalError.message}` });
     }
 };
