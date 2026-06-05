@@ -29,12 +29,20 @@ module.exports = async (req, res) => {
 
             // Logowanie
             const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
-            const tokenRes = await makeHttpsRequest({
-                hostname: 'identity.bitwarden.com',
-                path: '/connect/token',
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            }, tokenStr);
+            // Znajdź ten fragment w api/index.js i podmień go na:
+const tokenRes = await makeHttpsRequest({
+    hostname: 'identity.bitwarden.com',
+    path: '/connect/token',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+}, tokenStr);
+
+// TO WYPISZE BŁĄD W LOGACH VERCEL, A NIE W PRZEGLĄDARCE:
+console.log("STATUS:", tokenRes.statusCode);
+console.log("BODY:", tokenRes.body);
+
+const tokenData = JSON.parse(tokenRes.body);
+const token = tokenData.access_token;
             
             const token = JSON.parse(tokenRes.body).access_token;
             if (!token) return res.status(401).json({ error: "Błąd autoryzacji" });
