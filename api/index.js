@@ -97,15 +97,20 @@ module.exports = async (req, res) => {
             body: JSON.stringify(payloadCipher)
         });
 
-        if (cipherResponse.ok) {
+      if (cipherResponse.ok) {
             return res.status(200).json({ success: true });
         } else {
-            const rawError = await cipherResponse.text();
-            console.error("Odrzucenie Bitwarden:", rawError);
-            return res.status(500).json({ error: "Bitwarden odrzucil strukture.", details: rawError });
+            // Przechwytujemy surowy komunikat błędu z Bitwardena, bez względu na to czy to tekst, czy JSON
+            let rawError = "Brak szczegolow";
+            try {
+                rawError = await cipherResponse.text();
+            } catch (e) {
+                // ignoruj
+            }
+            
+            // Zwracamy status 400 zamiast 500, przekazując dokładny powód z chmury do przeglądarki
+            return res.status(400).json({ 
+                error: "Bitwarden odrzucil paczke.", 
+                bitwardenSays: rawError 
+            });
         }
-
-    } catch (err) {
-        return res.status(500).json({ error: "Blad krytyczny.", details: err.message });
-    }
-};
