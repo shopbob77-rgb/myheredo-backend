@@ -1,40 +1,32 @@
 module.exports = async (req, res) => {
-    // 1. Ustawienia, które zawsze przepuszczają komunikację (CORS)
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Bitwarden-Client-Version');
-
-    if (req.method === 'OPTIONS') return res.status(200).end();
+    
+    // Pobierz token z nagłówka, który wysyła Twoja aplikacja
+    const authToken = req.headers['authorization'];
+    
+    if (!authToken) {
+        return res.status(401).json({ error: "Brak tokena w nagłówku Authorization" });
+    }
 
     try {
-        console.log("DEBUG: Próba połączenia z Bitwarden...");
-        
-        // Używamy fetch, bo jest najstabilniejszy w Vercel
-        const response = await fetch('https://api.bitwarden.com/ciphers', {
-            method: 'POST',
+        // Testujemy połączenie, sprawdzając profil
+        const response = await fetch('https://api.bitwarden.com/accounts/profile', {
+            method: 'GET',
             headers: {
-                'Authorization': req.headers['authorization'],
-                'Content-Type': 'application/json',
-                'Device-Type': '1',
-                'Bitwarden-Client-Version': '2024.0.0',
-                'Device-Identifier': '00000000-0000-0000-0000-000000000000'
-            },
-            body: JSON.stringify({ name: "Test" }) // Minimalny ładunek
+                'Authorization': authToken,
+                'Device-Type': '1', 
+                'Bitwarden-Client-Version': '2024.0.0'
+            }
         });
 
-        const data = await response.json();
+        const data = await response.text(); // Pobieramy jako tekst, żeby uniknąć błędu JSON
         
-        // Zwracamy odpowiedź z Bitwardena bezpośrednio do aplikacji
-        return res.status(response.status).json(data);
+        return res.status(200).json({
+            status: response.status,
+            raw_response: data // Zobaczymy dokładnie, co odpisuje Bitwarden
+        });
 
     } catch (error) {
-        // Jeśli cokolwiek pójdzie nie tak, serwer NIE ZAWIESI SIĘ
-        // Tylko wyśle błąd do aplikacji - dzięki temu aplikacja nie "stoi"
-        console.error("DEBUG: Błąd krytyczny:", error.message);
-        return res.status(200).json({ 
-            error: "Połączenie nieudane", 
-            details: error.message,
-            force_continue: true // Dodatkowa flaga, żeby aplikacja mogła przejść dalej
-        });
+        return res.status(500).json({ error: "Błąd połączenia", details: error.message });
     }
-};
+};;
