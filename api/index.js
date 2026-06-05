@@ -80,14 +80,14 @@ app.post('/api', async (req, res) => {
             finalContent = `Aktualizacja skrytki MyHeredo - Brak dodatkowej zawartości tekstowej.`;
         }
 
-        // 3. Budowanie payloadu dla bezpiecznego obiektu kolekcji (Cipher typu Secure Note)
+       // 3. Budowanie payloadu dla bezpiecznego obiektu kolekcji (Cipher typu Secure Note)
         const payloadCipher = {
             organizationId: organizationId.trim(),
-            type: 2, // Stała Bitwarden: 2 oznacza bezpieczną notatkę (Secure Note)
+            type: 2, 
             name: `MyHeredo - Protokół (${action || 'Sync'}) - ${new Date().toLocaleDateString('pl-PL')}`,
             notes: finalContent,
             folderId: null,
-            collectionIds: [] // Dane lądują w sejfie głównym organizacji dostępnym dla klucza API
+            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"] // <--- DOKŁADNIE TA WARTOŚĆ
         };
 
         // 4. Wywołanie żądania zapisu bezpośrednio do zasobów sejfu chmury Bitwarden
