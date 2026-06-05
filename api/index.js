@@ -14,9 +14,10 @@ function makeHttpsRequest(options, payload = null) {
 }
 
 module.exports = async (req, res) => {
+    // Nagłówki CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Bitwarden-Client-Version');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     
@@ -27,16 +28,13 @@ module.exports = async (req, res) => {
             const data = body ? JSON.parse(body) : {};
             const { action, vault } = data;
 
-            // 1. Pobranie tokena z Bitwarden
-            const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
+            // Pobieranie tokena OAuth
+            const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}&scope=api`;
             const tokenRes = await makeHttpsRequest({
                 hostname: 'identity.bitwarden.com',
                 path: '/connect/token',
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Bitwarden-Client-Version': '2024.0.0'
-                }
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             }, tokenStr);
             
             const tokenData = JSON.parse(tokenRes.body);
@@ -44,18 +42,14 @@ module.exports = async (req, res) => {
                 return res.status(401).json({ error: "Błąd autoryzacji", details: tokenRes.body });
             }
 
-            if (action === "get_vault") {
-                return res.status(200).json({ success: true });
-            }
-
-            // 2. Przygotowanie notatki
+            // Ustawienie notatki
             const cipher = JSON.stringify({
-                type: 2,
+                type: 2, // Secure Note
                 name: "MyHeredo Protokół",
                 notes: JSON.stringify(vault || { info: "Protokół wygenerowany" })
             });
 
-            // 3. Zapis do sejfu (z wymaganymi nagłówkami)
+            // Zapis w Bitwarden z wymaganym nagłówkiem urządzenia
             const cipherOptions = {
                 hostname: 'api.bitwarden.com',
                 path: '/ciphers',
@@ -63,8 +57,7 @@ module.exports = async (req, res) => {
                 headers: {
                     'Authorization': `Bearer ${tokenData.access_token}`,
                     'Content-Type': 'application/json',
-                    'Device-Type': '1',
-                    'Bitwarden-Client-Version': '2024.0.0',
+                    'Device-Type': '1', // <--- TO NAPRAWIA "device_error"
                     'Content-Length': Buffer.byteLength(cipher)
                 }
             };
