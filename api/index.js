@@ -1,5 +1,6 @@
 const https = require('https');
 
+// Funkcja pomocnicza do zapytań HTTPS
 function makeHttpsRequest(options, payload = null) {
     return new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
@@ -25,9 +26,8 @@ module.exports = async (req, res) => {
     req.on('end', async () => {
         try {
             const data = body ? JSON.parse(body) : {};
-            const { action, vault } = data;
-
-            // 1. Pobranie tokena z Bitwarden
+            
+            // 1. Pobranie tokena (poprawiona obsługa zmiennych)
             const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}&scope=api`;
             const tokenRes = await makeHttpsRequest({
                 hostname: 'identity.bitwarden.com',
@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Bitwarden-Client-Version': '2024.0.0'
+                    'Bitwarden-Client-Version': '2024.0.0' // Wymagane przez Bitwarden
                 }
             }, tokenStr);
             
@@ -44,15 +44,11 @@ module.exports = async (req, res) => {
                 return res.status(401).json({ error: "Błąd autoryzacji", details: tokenRes.body });
             }
 
-            if (action === "get_vault") {
-                return res.status(200).json({ success: true });
-            }
-
             // 2. Przygotowanie notatki
             const cipher = JSON.stringify({
                 type: 2,
                 name: "MyHeredo Protokół",
-                notes: JSON.stringify(vault || { info: "Protokół wygenerowany" })
+                notes: JSON.stringify(data.vault || { info: "Protokół wygenerowany" })
             });
 
             // 3. Zapis do sejfu (z wymaganymi nagłówkami)
@@ -63,8 +59,8 @@ module.exports = async (req, res) => {
                 headers: {
                     'Authorization': `Bearer ${tokenData.access_token}`,
                     'Content-Type': 'application/json',
-                    'Device-Type': '1',
-                    'Bitwarden-Client-Version': '2024.0.0',
+                    'Device-Type': '1', // Identyfikacja urządzenia
+                    'Bitwarden-Client-Version': '2024.0.0', // Wersja klienta
                     'Content-Length': Buffer.byteLength(cipher)
                 }
             };
@@ -74,7 +70,7 @@ module.exports = async (req, res) => {
             if (postRes.statusCode >= 200 && postRes.statusCode < 300) {
                 return res.status(200).json({ success: true, message: "Zapisano!" });
             } else {
-                return res.status(postRes.statusCode).json({ error: "Odrzucono", details: postRes.body });
+                return res.status(postRes.statusCode).json({ error: "Odrzucono przez API", details: postRes.body });
             }
         } catch (e) {
             return res.status(500).json({ error: e.message });
