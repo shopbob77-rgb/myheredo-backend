@@ -1,79 +1,39 @@
 const https = require('https');
 
-// Funkcja pomocnicza do zapytań HTTPS
-function makeHttpsRequest(options, payload = null) {
-    return new Promise((resolve, reject) => {
-        const req = https.request(options, (res) => {
-            let resBody = '';
-            res.on('data', (chunk) => resBody += chunk);
-            res.on('end', () => resolve({ statusCode: res.statusCode, body: resBody }));
-        });
-        req.on('error', (err) => reject(err));
-        if (payload) req.write(payload);
-        req.end();
-    });
-}
-
 module.exports = async (req, res) => {
+    // Nagłówki dla przeglądarki
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Bitwarden-Client-Version');
+    res.setHeader('Access-Control-Allow-Methods', 'POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method !== 'POST') return res.status(200).end();
+
+    const data = JSON.parse(req.body || '{}');
+
+    // 1. Pobranie tokena (Uproszczone)
+    const authData = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}&scope=api`;
     
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', async () => {
-        try {
-            const data = body ? JSON.parse(body) : {};
+    const tokenReq = https.request({
+        hostname: 'identity.bitwarden.com',
+        path: '/connect/token',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    }, (tokenRes) => {
+        let body = '';
+        tokenRes.on('data', (d) => body += d);
+        tokenRes.on('end', () => {
+            const tokenJson = JSON.parse(body);
             
-            // 1. Pobranie tokena (poprawiona obsługa zmiennych)
-            const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}&scope=api`;
-            const tokenRes = await makeHttpsRequest({
-                hostname: 'identity.bitwarden.com',
-                path: '/connect/token',
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Bitwarden-Client-Version': '2024.0.0' // Wymagane przez Bitwarden
-                }
-            }, tokenStr);
-            
-            const tokenData = JSON.parse(tokenRes.body);
-            if (!tokenData.access_token) {
-                return res.status(401).json({ error: "Błąd autoryzacji", details: tokenRes.body });
+            // JEŚLI TU JEST 401, PROBLEM JEST W KLUCZACH (ID/SECRET)
+            if (!tokenJson.access_token) {
+                return res.status(401).json({ error: "Auth failed", debug: tokenJson });
             }
 
-            // 2. Przygotowanie notatki
-            const cipher = JSON.stringify({
-                type: 2,
-                name: "MyHeredo Protokół",
-                notes: JSON.stringify(data.vault || { info: "Protokół wygenerowany" })
-            });
-
-            // 3. Zapis do sejfu (z wymaganymi nagłówkami)
-            const cipherOptions = {
-                hostname: 'api.bitwarden.com',
-                path: '/ciphers',
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${tokenData.access_token}`,
-                    'Content-Type': 'application/json',
-                    'Device-Type': '1', // Identyfikacja urządzenia
-                    'Bitwarden-Client-Version': '2024.0.0', // Wersja klienta
-                    'Content-Length': Buffer.byteLength(cipher)
-                }
-            };
-
-            const postRes = await makeHttpsRequest(cipherOptions, cipher);
-            
-            if (postRes.statusCode >= 200 && postRes.statusCode < 300) {
-                return res.status(200).json({ success: true, message: "Zapisano!" });
-            } else {
-                return res.status(postRes.statusCode).json({ error: "Odrzucono przez API", details: postRes.body });
-            }
-        } catch (e) {
-            return res.status(500).json({ error: e.message });
-        }
+            // Sukces autoryzacji - tu wysyłamy odpowiedź do frontendu
+            return res.status(200).json({ success: true, token_received: true });
+        });
     });
+
+    tokenReq.write(authData);
+    tokenReq.end();
 };
