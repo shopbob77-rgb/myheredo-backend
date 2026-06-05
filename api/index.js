@@ -1,7 +1,31 @@
 const https = require('https');
 
+// Funkcja pomocnicza do bezpiecznego zbierania i parsowania paczek danych POST
+function getRequestBody(req) {
+    return new Promise((resolve) => {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            if (!body) return resolve({});
+            try {
+                resolve(JSON.parse(body));
+            } catch (e) {
+                // Jeśli dane to nie JSON, spróbuj sparsować jako zwykły tekst/formularz
+                const params = new URLSearchParams(body);
+                const obj = {};
+                for (const [key, value] of params) {
+                    obj[key] = value;
+                }
+                resolve(obj);
+            }
+        });
+    });
+}
+
 module.exports = async (req, res) => {
-    // 1. Pełne nagłówki CORS
+    // 1. Pełne nagłówki CORS dla stabilnej komunikacji z domeną główną
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -10,32 +34,34 @@ module.exports = async (req, res) => {
         'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
     );
 
+    // Obsługa żądań sprawdzających OPTIONS (Preflight)
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
 
-    // Akceptujemy zapytania POST pod każdy wariant adresu URL
     if (req.method !== 'POST') {
-        return res.status(200).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
+        return res.status(405).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
     }
 
     try {
-        const { action, dmsDays, vault, tekstNotatki } = req.body || {};
+        // Bezpieczne odebranie danych przesłanych przez app.js
+        const body = await getRequestBody(req);
+        const { action, dmsDays, vault, tekstNotatki } = body;
 
         const organizationId = process.env.BW_ORGANIZATION_ID;
         const clientId = process.env.BW_CLIENT_ID;
         const clientSecret = process.env.BW_CLIENT_SECRET;
 
         if (!organizationId || !clientId || !clientSecret) {
-            return res.status(200).json({ success: false, log: "Brak zmiennych srodowiskowych BW_ na Vercelu." });
+            return res.status(200).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
         }
 
-        // 2. KROK 1: Autoryzacja OAuth2 w Bitwarden (Port 443 - Standard HTTPS)
+        // 2. Autoryzacja w oficjalnym API Bitwarden (OAuth2)
         const tokenDataString = `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`;
         
         const tokenOptions = {
             hostname: 'identity.bitwarden.com',
-            port: 443, 
+            port: 443,
             path: '/connect/token',
             method: 'POST',
             headers: {
@@ -46,15 +72,15 @@ module.exports = async (req, res) => {
 
         const accessToken = await new Promise((resolve, reject) => {
             const tokenReq = https.request(tokenOptions, (tokenRes) => {
-                let body = '';
-                tokenRes.on('data', (chunk) => body += chunk);
+                let resBody = '';
+                tokenRes.on('data', (chunk) => resBody += chunk);
                 tokenRes.on('end', () => {
                     try {
-                        const parsed = JSON.parse(body);
+                        const parsed = JSON.parse(resBody);
                         if (parsed.access_token) resolve(parsed.access_token);
-                        else reject(new Error("Bitwarden odrzucil klucze Client ID / Secret."));
+                        else reject(new Error("Bitwarden odrzucił klucze dostępowe API."));
                     } catch (e) {
-                        reject(new Error("Blad parsowania odpowiedzi autoryzacji."));
+                        reject(new Error("Błąd autoryzacji tokena."));
                     }
                 });
             });
@@ -63,17 +89,17 @@ module.exports = async (req, res) => {
             tokenReq.end();
         });
 
-        // 3. Przygotowanie tresci
+        // 3. Budowanie struktury treści do zapisu
         let finalContent = "";
         if (action === "activate_dms" || vault) {
-            finalContent = `--- SYSTEM SUKCESJI ACTIVE ---\nData: ${new Date().toLocaleString('pl-PL')}\nInterwal: ${dmsDays || 90} dni\n\nPayload:\n${JSON.stringify(vault || {}, null, 2)}`;
+            finalContent = `--- SYSTEM SUKCESJI ACTIVE ---\nData: ${new Date().toLocaleString('pl-PL')}\nInterwał: ${dmsDays || 90} dni\n\nPayload:\n${JSON.stringify(vault || {}, null, 2)}`;
         } else if (tekstNotatki) {
             finalContent = tekstNotatki;
         } else {
             finalContent = "Aktualizacja skrytki MyHeredo";
         }
 
-        // 4. Formatowanie CipherString
+        // 4. Przygotowanie formatu CipherString akceptowanego przez Bitwarden
         const cleanTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
         const base64Title = Buffer.from(cleanTitle).toString('base64');
         const base64Notes = Buffer.from(finalContent).toString('base64');
@@ -84,17 +110,17 @@ module.exports = async (req, res) => {
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
-            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"], // ID Twojej kolekcji
+            collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"],
             type: 2,
             name: bitwardenName,
             notes: bitwardenNotes,
             secureNote: { type: 0 }
         });
 
-        // 5. KROK 2: Wysylanie rekordu do Bitwarden API (Port 443 - Standard HTTPS)
+        // 5. Wysłanie gotowego szyfru do chmury Bitwarden
         const cipherOptions = {
             hostname: 'api.bitwarden.com',
-            port: 443, 
+            port: 443,
             path: '/ciphers',
             method: 'POST',
             headers: {
@@ -106,17 +132,17 @@ module.exports = async (req, res) => {
 
         const result = await new Promise((resolve) => {
             const cipherReq = https.request(cipherOptions, (cipherRes) => {
-                let body = '';
-                cipherRes.on('data', (chunk) => body += chunk);
+                let cipherBody = '';
+                cipherRes.on('data', (chunk) => cipherBody += chunk);
                 cipherRes.on('end', () => {
                     if (cipherRes.statusCode >= 200 && cipherRes.statusCode < 300) {
-                        resolve({ success: true, log: "Sukces! Zapisano w Bitwarden." });
+                        resolve({ success: true, log: "Sukces! Protokół zsynchronizowany w Bitwarden." });
                     } else {
-                        resolve({ success: false, log: `Bitwarden API zwrocil status: ${cipherRes.statusCode}. Sprawdz czy ID kolekcji jest poprawne.` });
+                        resolve({ success: false, log: `Bitwarden API zwrócił status: ${cipherRes.statusCode}. Sprawdź uprawnienia zapisu w kolekcji.` });
                     }
                 });
             });
-            cipherReq.on('error', (err) => resolve({ success: false, log: `Blad sieci API: ${err.message}` }));
+            cipherReq.on('error', (err) => resolve({ success: false, log: `Błąd połączenia z API: ${err.message}` }));
             cipherReq.write(payloadCipher);
             cipherReq.end();
         });
@@ -124,7 +150,7 @@ module.exports = async (req, res) => {
         return res.status(200).json(result);
 
     } catch (globalError) {
-        // Pelne wygaszenie bledow 500 - serwer zawsze odpowiada strukturalnie
-        return res.status(200).json({ success: false, log: `Blad przetwarzania: ${globalError.message}` });
+        // Bezwarunkowe wygaszenie błędów 500 w przeglądarce
+        return res.status(200).json({ success: false, log: `Błąd przetwarzania danych: ${globalError.message}` });
     }
 };
