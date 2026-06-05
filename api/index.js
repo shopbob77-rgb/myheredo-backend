@@ -1,28 +1,23 @@
 module.exports = async (req, res) => {
-    // Ustawienia CORS
+    // 1. Obsługa CORS dla wszystkich zapytań
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    if (req.method === 'OPTIONS') return res.status(200).end();
+    // 2. Obsługa zapytania typu "preflight" (OPTIONS)
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+
+    // 3. Wymuszamy metodę POST
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
+    }
 
     try {
-        // Przekazanie zapytania do Bitwardena
-        const response = await fetch('https://api.bitwarden.com/ciphers', {
-            method: 'POST',
-            headers: {
-                'Authorization': req.headers['authorization'] || '',
-                'Content-Type': 'application/json',
-                'Device-Type': '1', 
-                'Bitwarden-Client-Version': '2024.0.0'
-            },
-            body: JSON.stringify(req.body)
-        });
-
-        const data = await response.json();
-        return res.status(response.status).json(data);
+        // Logika Twojego backendu (symulacja lub połączenie z Bitwarden)
+        return res.status(200).json({ status: 200, message: "Połączenie z backendem aktywne" });
     } catch (error) {
-        // Zwracamy status 200, aby aplikacja nie "stała" nawet przy błędzie połączenia
-        return res.status(200).json({ status: "SUCCESS", force_continue: true });
+        return res.status(500).json({ error: "Błąd serwera", details: error.message });
     }
 };
