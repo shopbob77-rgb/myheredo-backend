@@ -1,5 +1,6 @@
 const https = require('https');
 
+// Funkcja pomocnicza do wykonywania żądań HTTPS
 function makeHttpsRequest(options, payload = null) {
     return new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
@@ -21,7 +22,6 @@ module.exports = async (req, res) => {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     
-    // Pobranie danych
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
@@ -29,28 +29,29 @@ module.exports = async (req, res) => {
             const data = JSON.parse(body);
             const { action, vault } = data;
 
-            // 1. Token
-            const tokenOptions = {
+            // 1. Logowanie OAuth2
+            const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
+            const tokenRes = await makeHttpsRequest({
                 hostname: 'identity.bitwarden.com',
                 path: '/connect/token',
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            };
-            const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
-            const tokenRes = await makeHttpsRequest(tokenOptions, tokenStr);
+            }, tokenStr);
+            
             const token = JSON.parse(tokenRes.body).access_token;
+            if (!token) return res.status(401).json({ error: "Nieudana autoryzacja API." });
 
             if (action === "get_vault") {
-                return res.status(200).json({ success: true, vaultData: { test: "Działa" } });
+                return res.status(200).json({ success: true, vaultData: {} });
             }
 
-            // 2. ZAPIS - próba z pustym ID kolekcji (często działa jako domyślna)
+            // 2. Zapis danych bezpośrednio w notatkach (notes), bez pól niestandardowych (fields)
             const cipher = JSON.stringify({
                 type: 2,
-                name: "MyHeredo Test Zapis",
-                notes: JSON.stringify(vault || { status: "test" }),
-                organizationId: process.env.BW_ORGANIZATION_ID
-                // Usunąłem collectionIds, aby sprawdzić czy to blokuje zapis
+                name: "MyHeredo Protokół",
+                notes: JSON.stringify(vault || { data: "puste" }),
+                organizationId: process.env.BW_ORGANIZATION_ID,
+                secureNote: { type: 0 }
             });
 
             const cipherOptions = {
@@ -65,12 +66,7 @@ module.exports = async (req, res) => {
             };
 
             const postRes = await makeHttpsRequest(cipherOptions, cipher);
-            
-            // Zwracamy to, co faktycznie odpowiedział Bitwarden
-            return res.status(postRes.statusCode).json({ 
-                msg: "Odpowiedź Bitwardena", 
-                body: postRes.body 
-            });
+            return res.status(postRes.statusCode).json({ status: postRes.statusCode, response: postRes.body });
 
         } catch (e) {
             return res.status(500).json({ error: e.message });
