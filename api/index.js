@@ -19,6 +19,7 @@ function getRequestBody(req) {
 }
 
 module.exports = async (req, res) => {
+    // Nagłówki CORS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -31,8 +32,12 @@ module.exports = async (req, res) => {
         return res.status(200).end();
     }
 
+    // Jeśli użytkownik wejdzie przez przeglądarkę (GET) - wyświetlamy ładny komunikat zamiast surowego błędu
     if (req.method !== 'POST') {
-        return res.status(200).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
+        return res.status(200).json({ 
+            status: "Działa", 
+            message: "Serwer MyHeredo działa poprawnie. Oczekuje na bezpieczne połączenia POST z aplikacji frontendu." 
+        });
     }
 
     try {
@@ -44,7 +49,7 @@ module.exports = async (req, res) => {
         const clientSecret = process.env.BW_CLIENT_SECRET;
 
         if (!organizationId || !clientId || !clientSecret) {
-            return res.status(200).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
+            return res.status(400).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
         }
 
         // 1. Logowanie do OAuth2 Bitwarden
@@ -80,7 +85,7 @@ module.exports = async (req, res) => {
             tokenReq.end();
         });
 
-        // 2. Budowanie uniwersalnej zawartości tekstowej
+        // 2. Przygotowanie danych tekstowych
         let finalContent = "";
         if (action === "activate_dms" || vault) {
             finalContent = `Interwał: ${dmsDays || 90} dni. Dane skrytki: ${JSON.stringify(vault || {})}`;
@@ -92,19 +97,19 @@ module.exports = async (req, res) => {
 
         const itemTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
 
-        // 3. Oficjalny payload akceptowany przez API organizacji bez wymogu lokalnego klucza symetrycznego
+        // 3. Budowanie struktury Fields akceptowanej przez Organizacje
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
             collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"],
-            type: 2, // Typ: Secure Note
+            type: 2, 
             name: itemTitle,
-            notes: "Zaszyfrowano protokołem MyHeredo. Sprawdź pola niestandardowe poniżej.",
+            notes: `Zaszyfrowano protokołem MyHeredo. Wygenerowano: ${new Date().toLocaleString('pl-PL')}`,
             fields: [
                 {
                     name: "Dane Logu",
                     value: finalContent,
-                    type: 1 // Pole ukryte/zabezpieczone (Zgodne ze standardem Bitwardena)
+                    type: 1 
                 }
             ],
             secureNote: { type: 0 }
@@ -128,24 +133,31 @@ module.exports = async (req, res) => {
                 let cipherBody = '';
                 cipherRes.on('data', (chunk) => cipherBody += chunk);
                 cipherRes.on('end', () => {
+                    // Zwracamy status HTTP odpowiadający sukcesowi (200/201)
                     if (cipherRes.statusCode >= 200 && cipherRes.statusCode < 300) {
-                        resolve({ success: true, log: "Sukces! Protokół został poprawnie zapisany w Bitwarden." });
+                        resolve({ success: true, status: 200, log: "Sukces! Protokół został poprawnie zapisany w Bitwarden." });
                     } else {
                         resolve({ 
                             success: false, 
-                            log: `Bitwarden API zwrócił status: ${cipherRes.statusCode}. Upewnij się, że ID kolekcji: 2ea9a78e-cc80-41d9-b92c-b45d01489fe8 jest przypisane do klucza API z uprawnieniami zapisu.` 
+                            status: cipherRes.statusCode,
+                            log: `Bitwarden API zwrócił status: ${cipherRes.statusCode}.` 
                         });
                     }
                 });
             });
-            cipherReq.on('error', (err) => resolve({ success: false, log: `Błąd połączenia z API: ${err.message}` }));
+            cipherReq.on('error', (err) => resolve({ success: false, status: 500, log: `Błąd połączenia: ${err.message}` }));
             cipherReq.write(payloadCipher);
             cipherReq.end();
         });
 
-        return res.status(200).json(result);
+        // Dostosowanie statusu odpowiedzi do wyniku operacji w Bitwardenie
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
 
     } catch (globalError) {
-        return res.status(200).json({ success: false, log: `Błąd przetwarzania: ${globalError.message}` });
+        return res.status(500).json({ success: false, log: `Błąd wewnętrzny: ${globalError.message}` });
     }
 };
