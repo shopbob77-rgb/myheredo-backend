@@ -28,13 +28,22 @@ module.exports = async (req, res) => {
             const { action, vault } = data;
 
             // 1. Pobieranie tokena
-            const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}`;
-            const tokenRes = await makeHttpsRequest({
-                hostname: 'identity.bitwarden.eu',
-                path: '/connect/token',
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            }, tokenStr);
+            // ... wewnątrz funkcji (tam gdzie robisz tokenRes)
+const tokenRes = await makeHttpsRequest({
+    hostname: 'identity.bitwarden.com',
+    path: '/connect/token',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+}, tokenStr);
+
+// Kluczowe logowanie:
+console.log("STATUS_KODU_TOKENA:", tokenRes.statusCode);
+console.log("TRESC_ODPOWIEDZI_TOKENA:", tokenRes.body);
+
+if (tokenRes.statusCode !== 200) {
+    return res.status(401).json({ error: "Bitwarden odrzucił dane", details: tokenRes.body });
+}
+// ... dalej reszta kodu
             
             // Logowanie do Vercel dla celów diagnostycznych
             console.log("Token Status:", tokenRes.statusCode);
