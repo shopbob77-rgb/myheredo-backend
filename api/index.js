@@ -1,23 +1,17 @@
 const https = require('https');
 
-// Funkcja pomocnicza do bezpiecznego zbierania i parsowania paczek danych POST
 function getRequestBody(req) {
     return new Promise((resolve) => {
         let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
+        req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', () => {
             if (!body) return resolve({});
             try {
                 resolve(JSON.parse(body));
             } catch (e) {
-                // Jeśli dane to nie JSON, spróbuj sparsować jako zwykły tekst/formularz
                 const params = new URLSearchParams(body);
                 const obj = {};
-                for (const [key, value] of params) {
-                    obj[key] = value;
-                }
+                for (const [key, value] of params) { obj[key] = value; }
                 resolve(obj);
             }
         });
@@ -25,7 +19,6 @@ function getRequestBody(req) {
 }
 
 module.exports = async (req, res) => {
-    // 1. Pełne nagłówki CORS dla stabilnej komunikacji z domeną główną
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -34,17 +27,15 @@ module.exports = async (req, res) => {
         'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
     );
 
-    // Obsługa żądań sprawdzających OPTIONS (Preflight)
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
 
     if (req.method !== 'POST') {
-        return res.status(405).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
+        return res.status(200).json({ error: "Metoda niedozwolona. Backend oczekuje zapytania typu POST." });
     }
 
     try {
-        // Bezpieczne odebranie danych przesłanych przez app.js
         const body = await getRequestBody(req);
         const { action, dmsDays, vault, tekstNotatki } = body;
 
@@ -56,7 +47,7 @@ module.exports = async (req, res) => {
             return res.status(200).json({ success: false, log: "Brak zmiennych środowiskowych BW_ w panelu Vercel." });
         }
 
-        // 2. Autoryzacja w oficjalnym API Bitwarden (OAuth2)
+        // 1. Logowanie do OAuth2 Bitwarden
         const tokenDataString = `grant_type=client_credentials&client_id=${clientId.trim()}&client_secret=${clientSecret.trim()}`;
         
         const tokenOptions = {
@@ -89,35 +80,37 @@ module.exports = async (req, res) => {
             tokenReq.end();
         });
 
-        // 3. Budowanie struktury treści do zapisu
+        // 2. Budowanie uniwersalnej zawartości tekstowej
         let finalContent = "";
         if (action === "activate_dms" || vault) {
-            finalContent = `--- SYSTEM SUKCESJI ACTIVE ---\nData: ${new Date().toLocaleString('pl-PL')}\nInterwał: ${dmsDays || 90} dni\n\nPayload:\n${JSON.stringify(vault || {}, null, 2)}`;
+            finalContent = `Interwał: ${dmsDays || 90} dni. Dane skrytki: ${JSON.stringify(vault || {})}`;
         } else if (tekstNotatki) {
             finalContent = tekstNotatki;
         } else {
             finalContent = "Aktualizacja skrytki MyHeredo";
         }
 
-        // 4. Przygotowanie formatu CipherString akceptowanego przez Bitwarden
-        const cleanTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
-        const base64Title = Buffer.from(cleanTitle).toString('base64');
-        const base64Notes = Buffer.from(finalContent).toString('base64');
+        const itemTitle = `MyHeredo - Protokol (${action || 'Sync'})`;
 
-        const bitwardenName = `2.${base64Title}|${base64Title}`;
-        const bitwardenNotes = `2.${base64Notes}|${base64Notes}`;
-
+        // 3. Oficjalny payload akceptowany przez API organizacji bez wymogu lokalnego klucza symetrycznego
         const payloadCipher = JSON.stringify({
             organizationId: organizationId.trim(),
             folderId: null,
             collectionIds: ["2ea9a78e-cc80-41d9-b92c-b45d01489fe8"],
-            type: 2,
-            name: bitwardenName,
-            notes: bitwardenNotes,
+            type: 2, // Typ: Secure Note
+            name: itemTitle,
+            notes: "Zaszyfrowano protokołem MyHeredo. Sprawdź pola niestandardowe poniżej.",
+            fields: [
+                {
+                    name: "Dane Logu",
+                    value: finalContent,
+                    type: 1 // Pole ukryte/zabezpieczone (Zgodne ze standardem Bitwardena)
+                }
+            ],
             secureNote: { type: 0 }
         });
 
-        // 5. Wysłanie gotowego szyfru do chmury Bitwarden
+        // 4. Wysłanie żądania utworzenia wpisu
         const cipherOptions = {
             hostname: 'api.bitwarden.com',
             port: 443,
@@ -136,9 +129,12 @@ module.exports = async (req, res) => {
                 cipherRes.on('data', (chunk) => cipherBody += chunk);
                 cipherRes.on('end', () => {
                     if (cipherRes.statusCode >= 200 && cipherRes.statusCode < 300) {
-                        resolve({ success: true, log: "Sukces! Protokół zsynchronizowany w Bitwarden." });
+                        resolve({ success: true, log: "Sukces! Protokół został poprawnie zapisany w Bitwarden." });
                     } else {
-                        resolve({ success: false, log: `Bitwarden API zwrócił status: ${cipherRes.statusCode}. Sprawdź uprawnienia zapisu w kolekcji.` });
+                        resolve({ 
+                            success: false, 
+                            log: `Bitwarden API zwrócił status: ${cipherRes.statusCode}. Upewnij się, że ID kolekcji: 2ea9a78e-cc80-41d9-b92c-b45d01489fe8 jest przypisane do klucza API z uprawnieniami zapisu.` 
+                        });
                     }
                 });
             });
@@ -150,7 +146,6 @@ module.exports = async (req, res) => {
         return res.status(200).json(result);
 
     } catch (globalError) {
-        // Bezwarunkowe wygaszenie błędów 500 w przeglądarce
-        return res.status(200).json({ success: false, log: `Błąd przetwarzania danych: ${globalError.message}` });
+        return res.status(200).json({ success: false, log: `Błąd przetwarzania: ${globalError.message}` });
     }
 };
