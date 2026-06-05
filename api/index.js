@@ -1,26 +1,22 @@
 module.exports = async (req, res) => {
+    // 1. Ustawienia CORS (wymagane dla poprawnej komunikacji z przeglądarką)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
     try {
-        const body = req.body || {};
+        // 2. Bezpieczne parsowanie JSON
+        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
         
-        // Jeśli frontend wyśle 'get_vault' - zwracamy dane
-        if (body.action === "get_vault") {
-            return res.status(200).json({ status: "SUCCESS", vaultData: { "notatka": "test" } });
-        }
-        
-        // Jeśli frontend wyśle 'save_cipher' - przyjmujemy dane
-        if (body.action === "save_cipher") {
-            console.log("Dane do zapisu:", body.data);
-            return res.status(200).json({ status: "SUCCESS", message: "Zapisano w chmurze" });
-        }
-
-        return res.status(200).json({ status: "SUCCESS", message: "Brak akcji" });
+        // 3. Obsługa żądania
+        return res.status(200).json({ 
+            status: "SUCCESS", 
+            message: "Połączenie nawiązane",
+            receivedAction: body.action 
+        });
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: "Błąd serwera" });
     }
 };
