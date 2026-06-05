@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
             const data = body ? JSON.parse(body) : {};
             const { action, vault } = data;
 
-            // Pobranie tokena z Bitwarden
+            // 1. Pobranie tokena z Bitwarden
             const tokenStr = `grant_type=client_credentials&client_id=${process.env.BW_CLIENT_ID}&client_secret=${process.env.BW_CLIENT_SECRET}&scope=api`;
             const tokenRes = await makeHttpsRequest({
                 hostname: 'identity.bitwarden.com',
@@ -48,14 +48,14 @@ module.exports = async (req, res) => {
                 return res.status(200).json({ success: true });
             }
 
-            // Przygotowanie notatki
+            // 2. Przygotowanie notatki
             const cipher = JSON.stringify({
                 type: 2,
                 name: "MyHeredo Protokół",
                 notes: JSON.stringify(vault || { info: "Protokół wygenerowany" })
             });
 
-            // Zapis do sejfu z wymaganymi nagłówkami
+            // 3. Zapis do sejfu (z wymaganymi nagłówkami)
             const cipherOptions = {
                 hostname: 'api.bitwarden.com',
                 path: '/ciphers',
