@@ -16,23 +16,30 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Zamiast destrukcji, najpierw sprawdzamy czy body istnieje
   const body = req.body || {};
-  const action = body.action;
-  const payload = body.payload || {};
+  const { action } = body;
 
   try {
     if (action === 'get_vault') {
-      const snapshot = await db.collection('notes').get();
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      res.status(200).json(data);
-    } 
-    else if (action === 'add_note') {
-      const docRef = await db.collection('notes').add({
-        content: payload.content,
-        createdAt: new Date().toISOString()
-      });
-      res.status(200).json({ success: true, id: docRef.id });
+      // Pobieramy nienaruszony stan skrytek sukcesyjnych dla klienta
+      const docRef = db.collection('vaults').doc('default_user_vault');
+      const doc = await docRef.get();
+
+      if (doc.exists) {
+        // Zwracamy dokładnie to, na co czeka Twój frontend: res.vaultData
+        res.status(200).json({ vaultData: doc.data() });
+      } else {
+        // Jeśli dokument nie istnieje, zwracamy strukturę domyślną z Twoimi skrytkami
+        const defaultVault = {
+          "Testament i Wola": "Zaszyfrowano",
+          "Osoby Uposażone": "Zdefiniowano (Jan Kowalski)",
+          "Polisy i Ubezpieczenia": "",
+          "Konta i Aktywa Cyfrowe": "Zabezpieczone"
+        };
+        res.status(200).json({ vaultData: defaultVault });
+      }
+    } else {
+      res.status(400).json({ error: "Unknown action" });
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
