@@ -22,12 +22,13 @@ module.exports = async (req, res) => {
         const authResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                grant_type: 'client_credentials',
-                client_id: process.env.BW_CLIENT_ID,
-                client_secret: process.env.BW_CLIENT_SECRET,
-                scope: 'api.organization'
-            })
+           // Zmień tę sekcję w swoim api/index.js
+body: new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: process.env.BW_CLIENT_ID,
+    client_secret: process.env.BW_CLIENT_SECRET,
+    scope: 'api' // Tutaj zmieniamy z 'api.organization' na 'api'
+})
         });
 
         const authData = await authResponse.json();
