@@ -8,14 +8,16 @@ module.exports = async (req, res) => {
     try {
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-        // Nagłówki wymagane przez API Bitwarden
+        // Stały identyfikator urządzenia (UUID) dla Twojego serwera
+        const DEVICE_ID = "6d4b5a21-9b1e-4c3e-8f2a-5d6b7c8d9e0f"; 
+
         const headers = { 
             'Bitwarden-Client-Version': '2024.1.0',
             'Bitwarden-Device-Name': 'MyHeredo-Server',
-            'Bitwarden-Device-Type': 'Web'
+            'Bitwarden-Device-Type': 'Web',
+            'Bitwarden-Device-Id': DEVICE_ID // TO JEST KLUCZOWE
         };
 
-        // 1. Pobranie tokena
         const authResponse = await fetch('https://identity.bitwarden.com/connect/token', {
             method: 'POST',
             headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -30,7 +32,6 @@ module.exports = async (req, res) => {
         const authData = await authResponse.json();
         if (!authData.access_token) return res.status(500).json({ error: "Token error", details: authData });
 
-        // 2. Pobieranie danych
         if (body.action === "get_vault") {
             const listRes = await fetch('https://api.bitwarden.com/ciphers', {
                 method: 'GET',
