@@ -1,111 +1,126 @@
 const admin = require("firebase-admin");
+const speakeasy = require("speakeasy");
+const qrcode = require("qrcode");
 
 if (!admin.apps.length) {
   try {
     const serviceAccount = JSON.parse(
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
     );
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
   } catch (err) {
-    console.error("Błąd inicjalizacji Firebase:", err);
+    console.error("Błąd Firebase:", err);
   }
 }
 
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // 🔥 BEZWZGLĘDNE USTAWIENIE NAGŁÓWKÓW CORS DLA KAŻDEGO ŻĄDANIA
+  // Wymuszenie nagłówków CORS dla każdej metody
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*'); 
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, PATCH, DELETE, POST, PUT');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-  // Obsługa zapytania wstępnego (Preflight OPTIONS) - Przeglądarka pyta, czy może wysłać POST
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  // Zabezpieczenie przed bezpośrednim wejściem z przeglądarki (GET)
   if (req.method === 'GET') {
-    return res.status(200).json({ 
-      status: "online", 
-      message: "MyHeredo API działa. Oczekuję na żądania typu POST z frontendu." 
-    });
+    return res.status(200).json({ status: "online", message: "MyHeredo API gotowe." });
   }
 
-  // Bezpieczne parsowanie zawartości body (żądania POST)
+  // 🔥 ABSOLUTNIE PANCERNE PARSOWANIE BODY
   let body = {};
   try {
     if (req.body) {
       body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     } else if (req.rawBody) {
       body = JSON.parse(req.rawBody.toString('utf8'));
+    } else {
+      // Jeśli Vercel schował dane głęboko w strumieniu żądania
+      const buffers = [];
+      for await (const chunk of req) {
+        buffers.push(chunk);
+      }
+      const data = Buffer.concat(buffers).toString();
+      if (data) body = JSON.parse(data);
     }
   } catch (e) {
-    console.error("Błąd parsowania JSON:", e);
-    return res.status(400).json({ error: "Nieprawidłowy format danych JSON." });
+    console.error("Błąd dekodowania JSON:", e);
+    // Nie wyrzucaj błędu 400 od razu, pozwól zdebuggować
   }
 
   const action = body.action;
   const payload = body.payload || {};
 
+  // Jeśli po tym wszystkim nadal nie ma akcji, zwracamy czytelny komunikat debugowania
   if (!action) {
-    return res.status(400).json({ error: "Brak zdefiniowanej akcji w żądaniu." });
+    return res.status(400).json({ 
+      error: "Odebrano puste żądanie (brak pola action).",
+      receivedMethod: req.method,
+      receivedHeaders: req.headers,
+      parsedBody: body
+    });
   }
 
-  const vaultDocRef = db.collection('vaults').doc('user_secure_vault');
-
   try {
-    if (action === 'get_vault') {
-      const doc = await vaultDocRef.get();
-      if (doc.exists) {
-        return res.status(200).json(doc.data());
-      } else {
-        const initialStructure = {
-          vaultData: { bank: "", crypto: "", business: "", social: "" },
-          categoryNames: { bank: "Banki & Finanse", crypto: "Kryptowaluty", business: "Biznes & Firmy", social: "Social Media" },
-          heirs: []
-        };
-        return res.status(200).json(initialStructure);
-      }
-    } 
-    
-    else if (action === 'add_note') {
-      const { category, content } = payload;
-      if (!category) {
-        return res.status(400).json({ error: "Brak kategorii." });
+    if (action === 'register_user') {
+      const { email } = payload;
+      if (!email) return res.status(400).json({ error: "Brak adresu email." });
+
+      // Sprawdzenie czy użytkownik istnieje
+      const userCheck = await db.collection('users').doc(email).get();
+      if (userCheck.exists) {
+        // Dla ułatwienia pokazu: jeśli istnieje, po prostu wygeneruj nowy kod QR zamiast rzucać błędem
+        const userData = userCheck.data();
+        const qrCodeDataUrl = await qrcode.toDataURL(`otpauth://totp/MyHeredo:${email}?secret=${userData.twoFactorSecret}&issuer=MyHeredo`);
+        return res.status(200).json({ success: true, qrCode: qrCodeDataUrl });
       }
 
-      await vaultDocRef.set({
-        vaultData: {
-          [category]: content
-        }
-      }, { merge: true });
+      // Generowanie sekretu 2FA
+      const secret = speakeasy.generateSecret({ name: `MyHeredo (${email})` });
+      const qrCodeDataUrl = await qrcode.toDataURL(secret.otpauth_url);
 
-      return res.status(200).json({ success: true });
-    } 
-    
-    else if (action === 'activate_succession') {
-      await vaultDocRef.set({
-        vaultData: payload.vaultData,
-        categoryNames: payload.categoryNames,
-        heirs: payload.heirs,
-        dmsTimeoutDays: payload.dmsTimeoutDays,
-        activatedAt: payload.activatedAt,
-        systemStatus: "ACTIVE"
-      }, { merge: true });
+      // Zapis w Firestore
+      await db.collection('users').doc(email).set({
+        email: email,
+        twoFactorSecret: secret.base32,
+        twoFactorEnabled: false,
+        createdAt: new Date().toISOString()
+      });
 
-      return res.status(200).json({ success: true });
-    } 
-    
-    else {
-      return res.status(400).json({ error: "Nieznana akcja: " + action });
+      return res.status(200).json({
+        success: true,
+        qrCode: qrCodeDataUrl
+      });
     }
 
+    if (action === 'verify_2fa_and_activate') {
+      const { email, token } = payload;
+      const userDoc = await db.collection('users').doc(email).get();
+
+      if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje." });
+      
+      const verified = speakeasy.totp.verify({
+        secret: userDoc.data().twoFactorSecret,
+        encoding: 'base32',
+        token: token,
+        window: 2
+      });
+
+      if (verified) {
+        await db.collection('users').doc(email).update({ twoFactorEnabled: true });
+        return res.status(200).json({ success: true });
+      } else {
+        return res.status(400).json({ error: "Błędny kod 2FA." });
+      }
+    }
+
+    // Domyślny fallback dla pozostałych akcji (z poprzednich wersji)
+    return res.status(400).json({ error: "Nieznana akcja: " + action });
+
   } catch (error) {
-    console.error("Błąd Firebase:", error);
     return res.status(500).json({ error: error.message });
   }
 };
