@@ -1,16 +1,11 @@
 const admin = require("firebase-admin");
 
-// Inicjalizacja Firebase Admin - tylko jeśli jeszcze nie jest zainicjowane
+// Konfiguracja Firebase
 if (!admin.apps.length) {
   try {
-    // Odczytujemy zmienną środowiskową zakodowaną w Base64 i zamieniamy na JSON
-    const serviceAccountJson = Buffer.from(
-      process.env.FIREBASE_SERVICE_ACCOUNT,
-      'base64'
-    ).toString('utf8');
-    
-    const serviceAccount = JSON.parse(serviceAccountJson);
-
+    const serviceAccount = JSON.parse(
+      Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
+    );
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
@@ -21,51 +16,24 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// Główna funkcja obsługująca zapytania
 module.exports = async (req, res) => {
-  // Pozwalamy na komunikację z różnych domen (CORS), jeśli Twój frontend jest pod innym adresem
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // Nagłówki CORS - aby przeglądarka nie blokowała Twojej strony
+  res.setHeader('Access-Control-Allow-Origin', 'https://myheredo.pl');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   try {
-    // Obsługa pobierania notatek (GET)
-    if (req.method === 'GET') {
-      const snapshot = await db.collection('notes').get();
-      const notes = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
-      }));
-      return res.status(200).json(notes);
-    }
-
-    // Obsługa zapisu notatki (POST)
-    if (req.method === 'POST') {
-      const { content, userEmail } = req.body;
-      
-      if (!content) {
-        return res.status(400).json({ error: "Brak treści notatki" });
-      }
-
-      const docRef = await db.collection('notes').add({
-        content: content,
-        userEmail: userEmail || 'anonim',
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      return res.status(200).json({ 
-        id: docRef.id, 
-        status: "SUCCESS" 
-      });
-    }
-
-    res.status(405).json({ error: "Method not allowed" });
+    // Przykład: pobieranie danych z kolekcji 'notatki'
+    const snapshot = await db.collection('notatki').get();
+    const dane = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    res.status(200).json(dane);
   } catch (error) {
-    console.error("Błąd serwera:", error);
-    res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+    console.error("Błąd API:", error);
+    res.status(500).json({ error: "Błąd serwera", details: error.message });
   }
 };
