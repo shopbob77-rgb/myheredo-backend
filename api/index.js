@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
 
   try {
     // Pobieranie danych z bazy
-    const snapshot = await db.collection('notatki').get();
+    const snapshot = await db.collection('notes').get();
     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     
     res.status(200).json(data);
