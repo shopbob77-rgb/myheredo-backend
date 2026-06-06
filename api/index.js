@@ -5,9 +5,7 @@ if (!admin.apps.length) {
     const serviceAccount = JSON.parse(
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
     );
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
   } catch (err) {
     console.error("Błąd inicjalizacji Firebase:", err);
   }
@@ -16,7 +14,7 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // Nagłówki CORS
+  // Nagłówki CORS dla pełnej komunikacji cross-origin
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -25,30 +23,39 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  // 🔥 BEZPIECZNIK LOGÓW: Jeśli to zwykłe wejście przez przeglądarkę (GET), nie szukaj logiki, tylko zwróć status
   if (req.method === 'GET') {
     return res.status(200).json({ 
       status: "online", 
-      message: "MyHeredo API działa poprawnie. Oczekuję na zapytania POST z aplikacji." 
+      message: "MyHeredo API działa. Oczekuję na żądania POST." 
     });
   }
 
-  // Bezpieczne parsowanie body dla zapytań POST
+  // 🔥 PANACEUM NA UNDEFINED REQ.BODY:
+  // Bezpieczne wyciąganie body z obiektów Vercela na 3 sposoby
   let body = {};
-  if (req.body) {
-    body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  try {
+    if (req.body) {
+      body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    } else if (req.rawBody) {
+      body = JSON.parse(req.rawBody.toString('utf8'));
+    }
+  } catch (e) {
+    console.error("Błąd parsowania JSON w backendzie:", e);
+    return res.status(400).json({ error: "Nieprawidłowy format danych JSON." });
   }
 
+  // Wyciągamy dane z zabezpieczonego obiektu body
   const action = body.action;
   const payload = body.payload || {};
 
-  // Identyfikator dokumentu w Firestore
+  // Jeśli frontend w ogóle nie przysłał akcji
+  if (!action) {
+    return res.status(400).json({ error: "Brak zdefiniowanej akcji (action) w żądaniu." });
+  }
+
   const vaultDocRef = db.collection('vaults').doc('user_secure_vault');
 
   try {
-    /**
-     * AKCJA 1: Pobieranie danych przy logowaniu
-     */
     if (action === 'get_vault') {
       const doc = await vaultDocRef.get();
       if (doc.exists) {
@@ -63,9 +70,6 @@ module.exports = async (req, res) => {
       }
     } 
     
-    /**
-     * AKCJA 2: Zapisywanie pojedynczej skrytki (Vercel Sync)
-     */
     else if (action === 'add_note') {
       const { category, content } = payload;
       if (!category) {
@@ -73,17 +77,12 @@ module.exports = async (req, res) => {
       }
 
       await vaultDocRef.set({
-        vaultData: {
-          [category]: content
-        }
+        vaultData: { [category]: content }
       }, { merge: true });
 
       return res.status(200).json({ success: true });
     } 
     
-    /**
-     * AKCJA 3: Uzbrojenie systemu i generowanie Certyfikatu
-     */
     else if (action === 'activate_succession') {
       await vaultDocRef.set({
         vaultData: payload.vaultData,
@@ -102,46 +101,10 @@ module.exports = async (req, res) => {
     }
 
   } catch (error) {
-    console.error("Błąd krytyczny bazy danych:", error);
+    console.error("Błąd Firebase:", error);
     return res.status(500).json({ error: error.message });
   }
 };
-    else if (action === 'add_note') {
-      const { category, content } = payload;
-      
-      if (!category) {
-        return res.status(400).json({ error: "Brak zdefiniowanej kategorii skrytki." });
-      }
-
-      // Aktualizujemy tylko jedno konkretne pole wewnątrz obiektu vaultData w Firestore
-      // Dzięki temu nie nadpisujemy pozostałych skrytek!
-      await vaultDocRef.set({
-        vaultData: {
-          [category]: content
-        }
-      }, { merge: true });
-
-      return res.status(200).json({ success: true });
-    } 
-    
-    /**
-     * AKCJA 3: Uzbrojenie systemu i generowanie Certyfikatu (Ostatni ekran nr 5)
-     */
-    else if (action === 'activate_succession') {
-      // Zapisujemy cały zebrany stan aplikacji (skrytki, spadkobiercy, czas DMS)
-      await vaultDocRef.set({
-        vaultData: payload.vaultData,
-        categoryNames: payload.categoryNames,
-        heirs: payload.heirs,
-        dmsTimeoutDays: payload.dmsTimeoutDays,
-        activatedAt: payload.activatedAt,
-        systemStatus: "ACTIVE"
-      }, { merge: true });
-
-      return res.status(200).json({ success: true });
-    } 
-    
-    else {
       return res.status(400).json({ error: "Nieznana akcja: " + action });
     }
 
