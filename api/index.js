@@ -5,7 +5,9 @@ if (!admin.apps.length) {
     const serviceAccount = JSON.parse(
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
     );
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
   } catch (err) {
     console.error("Błąd inicjalizacji Firebase:", err);
   }
@@ -14,24 +16,26 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // Nagłówki CORS dla pełnej komunikacji cross-origin
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // 🔥 BEZWZGLĘDNE USTAWIENIE NAGŁÓWKÓW CORS DLA KAŻDEGO ŻĄDANIA
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*'); 
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, PATCH, DELETE, POST, PUT');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
+  // Obsługa zapytania wstępnego (Preflight OPTIONS) - Przeglądarka pyta, czy może wysłać POST
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
+  // Zabezpieczenie przed bezpośrednim wejściem z przeglądarki (GET)
   if (req.method === 'GET') {
     return res.status(200).json({ 
       status: "online", 
-      message: "MyHeredo API działa. Oczekuję na żądania POST." 
+      message: "MyHeredo API działa. Oczekuję na żądania typu POST z frontendu." 
     });
   }
 
-  // 🔥 PANACEUM NA UNDEFINED REQ.BODY:
-  // Bezpieczne wyciąganie body z obiektów Vercela na 3 sposoby
+  // Bezpieczne parsowanie zawartości body (żądania POST)
   let body = {};
   try {
     if (req.body) {
@@ -40,17 +44,15 @@ module.exports = async (req, res) => {
       body = JSON.parse(req.rawBody.toString('utf8'));
     }
   } catch (e) {
-    console.error("Błąd parsowania JSON w backendzie:", e);
+    console.error("Błąd parsowania JSON:", e);
     return res.status(400).json({ error: "Nieprawidłowy format danych JSON." });
   }
 
-  // Wyciągamy dane z zabezpieczonego obiektu body
   const action = body.action;
   const payload = body.payload || {};
 
-  // Jeśli frontend w ogóle nie przysłał akcji
   if (!action) {
-    return res.status(400).json({ error: "Brak zdefiniowanej akcji (action) w żądaniu." });
+    return res.status(400).json({ error: "Brak zdefiniowanej akcji w żądaniu." });
   }
 
   const vaultDocRef = db.collection('vaults').doc('user_secure_vault');
@@ -73,11 +75,13 @@ module.exports = async (req, res) => {
     else if (action === 'add_note') {
       const { category, content } = payload;
       if (!category) {
-        return res.status(400).json({ error: "Brak zdefiniowanej kategorii skrytki." });
+        return res.status(400).json({ error: "Brak kategorii." });
       }
 
       await vaultDocRef.set({
-        vaultData: { [category]: content }
+        vaultData: {
+          [category]: content
+        }
       }, { merge: true });
 
       return res.status(200).json({ success: true });
@@ -102,14 +106,6 @@ module.exports = async (req, res) => {
 
   } catch (error) {
     console.error("Błąd Firebase:", error);
-    return res.status(500).json({ error: error.message });
-  }
-};
-      return res.status(400).json({ error: "Nieznana akcja: " + action });
-    }
-
-  } catch (error) {
-    console.error("Błąd krytyczny bazy danych:", error);
     return res.status(500).json({ error: error.message });
   }
 };
