@@ -16,9 +16,17 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  // RĘCZNE PARSOWANIE CIAŁA ZAPYTANIA (naprawa błędu undefined)
+  let body = {};
   try {
-    const { action, payload } = req.body;
+    body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  } catch (e) {
+    // Jeśli nie udało się sparsować, zostawiamy pusty obiekt
+  }
 
+  const { action, payload } = body;
+
+  try {
     if (action === 'get_vault') {
       const snapshot = await db.collection('notes').get();
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -27,9 +35,11 @@ module.exports = async (req, res) => {
     else if (action === 'add_note') {
       const docRef = await db.collection('notes').add({
         content: payload.content,
-        createdAt: new Date()
+        createdAt: new Date().toISOString()
       });
       res.status(200).json({ success: true, id: docRef.id });
+    } else {
+      res.status(400).json({ error: "Nieznana akcja: " + action });
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
