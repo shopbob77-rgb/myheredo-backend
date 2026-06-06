@@ -1,60 +1,71 @@
+const admin = require("firebase-admin");
+
+// Inicjalizacja Firebase Admin - tylko jeśli jeszcze nie jest zainicjowane
+if (!admin.apps.length) {
+  try {
+    // Odczytujemy zmienną środowiskową zakodowaną w Base64 i zamieniamy na JSON
+    const serviceAccountJson = Buffer.from(
+      process.env.FIREBASE_SERVICE_ACCOUNT,
+      'base64'
+    ).toString('utf8');
+    
+    const serviceAccount = JSON.parse(serviceAccountJson);
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+  } catch (error) {
+    console.error("Błąd inicjalizacji Firebase:", error);
+  }
+}
+
+const db = admin.firestore();
+
+// Główna funkcja obsługująca zapytania
 module.exports = async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Bitwarden-Client-Version');
+  // Pozwalamy na komunikację z różnych domen (CORS), jeśli Twój frontend jest pod innym adresem
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
-    try {
-        if (!process.env.BW_CLIENT_ID || !process.env.BW_CLIENT_SECRET) {
-            return res.status(500).json({ error: "Brak kluczy w zmiennych środowiskowych Vercel!" });
-        }
-
-        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-
-        // Stały identyfikator
-        const DEVICE_ID = "6d4b5a21-9b1e-4c3e-8f2a-5d6b7c8d9e0f";
-
-        const headers = { 
-            'Bitwarden-Client-Version': '2024.1.0',
-            'Bitwarden-Device-Name': 'MyHeredo-Server',
-            'Bitwarden-Device-Type': 'Web',
-            'Bitwarden-Device-Id': DEVICE_ID
-        };
-
-        // 1. Pobranie Access Tokena (dodajemy parametry device w body)
-        const authResponse = await fetch('https://identity.bitwarden.com/connect/token', {
-            method: 'POST',
-            headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                grant_type: 'client_credentials',
-                client_id: process.env.BW_CLIENT_ID,
-                client_secret: process.env.BW_CLIENT_SECRET,
-                scope: 'api',
-                device_type: 'web',
-                device_identifier: DEVICE_ID,
-                device_name: 'MyHeredo-Server'
-            })
-        });
-
-        const authData = await authResponse.json();
-        
-        if (!authData.access_token) {
-            return res.status(500).json({ error: "Nie udało się uzyskać tokena", details: authData });
-        }
-
-        // 2. Pobieranie danych
-        if (body.action === "get_vault") {
-            const listRes = await fetch('https://api.bitwarden.com/ciphers', {
-                method: 'GET',
-                headers: { ...headers, 'Authorization': `Bearer ${authData.access_token}` }
-            });
-            const vaultData = await listRes.json();
-            return res.status(200).json({ status: "SUCCESS", vaultData: vaultData.data || vaultData });
-        }
-
-        return res.status(200).json({ status: "OK" });
-    } catch (e) {
-        return res.status(500).json({ error: "Błąd: " + e.message });
+  try {
+    // Obsługa pobierania notatek (GET)
+    if (req.method === 'GET') {
+      const snapshot = await db.collection('notes').get();
+      const notes = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      }));
+      return res.status(200).json(notes);
     }
+
+    // Obsługa zapisu notatki (POST)
+    if (req.method === 'POST') {
+      const { content, userEmail } = req.body;
+      
+      if (!content) {
+        return res.status(400).json({ error: "Brak treści notatki" });
+      }
+
+      const docRef = await db.collection('notes').add({
+        content: content,
+        userEmail: userEmail || 'anonim',
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      return res.status(200).json({ 
+        id: docRef.id, 
+        status: "SUCCESS" 
+      });
+    }
+
+    res.status(405).json({ error: "Method not allowed" });
+  } catch (error) {
+    console.error("Błąd serwera:", error);
+    res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+  }
 };
