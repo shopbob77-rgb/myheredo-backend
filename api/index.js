@@ -8,7 +8,7 @@ if (!admin.apps.length) {
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
     );
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-  } catch (err) { // <- Naprawiona literówka (było okrągłe podsumowanie)
+  } catch (err) { // <--- NAPRAWIONE: Prawidłowy nawias klamrowy {
     console.error("Błąd Firebase:", err);
   }
 }
@@ -16,22 +16,23 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // PANCERNE NAGŁÓWKI CORS - Obsługują Twoją domenę i metody bezbłędnie
+  // 1. USTAWIEŃ NAGŁÓWKÓW CORS (Zanim serwer zrobi cokolwiek innego)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  // Obsługa zapytania wstępnego OPTIONS (Preflight)
+  // Obsługa żądań wstępnych OPTIONS (Preflight request)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
+  // Prosty test działania endpointu przez GET
   if (req.method === 'GET') {
     return res.status(200).json({ status: "online", message: "MyHeredo API gotowe." });
   }
 
-  // Bezpieczne parsowanie danych wejściowych (Request Body)
+  // 2. BEZPIECZNE PARSOWANIE BODY (Stream-buffer dla Vercel Serverless)
   let body = {};
   try {
     if (req.body) {
@@ -46,6 +47,7 @@ module.exports = async (req, res) => {
     }
   } catch (e) {
     console.error("Błąd dekodowania JSON:", e);
+    return res.status(400).json({ error: "Błędny format danych JSON." });
   }
 
   const action = body.action;
@@ -56,6 +58,7 @@ module.exports = async (req, res) => {
   }
 
   try {
+    // REJESTRACJA UŻYTKOWNIKA I GENEROWANIE QR
     if (action === 'register_user') {
       const { email } = payload;
       if (!email) return res.status(400).json({ error: "Brak adresu email." });
@@ -66,10 +69,10 @@ module.exports = async (req, res) => {
       if (userCheck.exists) {
         secretBase32 = userCheck.data().twoFactorSecret;
       } else {
-        // Generujemy standardowy sekret dla 2FA
+        // Generujemy bezpieczny sekret o stałej długości
         const secret = speakeasy.generateSecret({ length: 20 });
-        // Czyścimy ze znaków '=', które uniemożliwiają importowanie kont w telefonach
-        secretBase32 = secret.base32.replace(/=/g, '').toUpperCase();
+        // Bezwzględnie usuwamy znaki '=', które uniemożliwiają import w aplikacjach mobilnych
+        secretBase32 = secret.base32.toUpperCase().replace(/=/g, '');
 
         await db.collection('users').doc(email).set({
           email: email,
@@ -79,11 +82,11 @@ module.exports = async (req, res) => {
         });
       }
 
-      // 🛠️ FORMAT URUCHAMIAJĄCY APLIKACJE MOBILNE: Wszystko bezpiecznie zakodowane przez encodeURIComponent
+      // 🛠️ GENEROWANIE LINKU TOTP (Bezpiecznie zakodowane komponenty)
       const issuer = "MyHeredo";
       const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
       
-      // Wygenerowanie kodu graficznego QR (zwracane jako Base64)
+      // Konwersja linku na obrazek QR w formacie Base64 DataURL
       const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl);
 
       return res.status(200).json({
@@ -92,9 +95,10 @@ module.exports = async (req, res) => {
       });
     }
 
+    // WERYFIKACJA KODU Z APLIKACJI (2FA)
     if (action === 'verify_2fa_and_activate') {
       const { email, token } = payload;
-      if (!email || !token) return res.status(400).json({ error: "Brak e-maila lub tokenu." });
+      if (!email || !token) return res.status(400).json({ error: "Brak e-maila lub tokenu w żądaniu." });
 
       const userDoc = await db.collection('users').doc(email).get();
       if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje." });
@@ -103,7 +107,7 @@ module.exports = async (req, res) => {
         secret: userDoc.data().twoFactorSecret,
         encoding: 'base32',
         token: token,
-        window: 2
+        window: 2 // Tolerancja +/- 60 sekund na przesunięcia czasu w telefonach
       });
 
       if (verified) {
@@ -114,7 +118,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(400).json({ error: "Nieznana akcja" });
+    return res.status(400).json({ error: "Nieznana akcja: " + action });
 
   } catch (error) {
     return res.status(500).json({ error: error.message });
