@@ -9,7 +9,6 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-    // Uniwersalne nagłówki CORS dla eliminacji błędów blokowania zapytań
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -23,7 +22,7 @@ module.exports = async (req, res) => {
             return res.status(400).json({ error: "Brak zdefiniowanej akcji" });
         }
 
-        // --- REJESTRACJA UŻYTKOWNIKA ---
+        // --- REJESTRACJA NOWEGO UŻYTKOWNIKA ---
         if (body.action === 'register_user') {
             const email = body.payload ? body.payload.email : null;
             if (!email) return res.status(400).json({ error: "Brak adresu email" });
@@ -41,7 +40,7 @@ module.exports = async (req, res) => {
             return res.status(200).json({ success: true, qrCode: qrData, secretCode: secret.base32 });
         }
 
-        // --- WERYFIKACJA 2FA (Obsługuje każdą nazwę akcji z Twojego frontendu) ---
+        // --- WERYFIKACJA 2FA (Obsługuje akcję verify_2fa_and_activate) ---
         if (body.action === 'verify_2fa_and_activate' || body.action === 'verify_2fa' || body.action === 'check_2fa') {
             let email = body.payload ? body.payload.email : (body.email || null);
             let code = null;
@@ -49,7 +48,6 @@ module.exports = async (req, res) => {
             if (body.payload && body.payload.code) code = body.payload.code;
             else if (body.code) code = body.code;
             else {
-                // Skanowanie całego obiektu w poszukiwaniu ciągu 6 cyfr wpisanych przez użytkownika
                 const match = JSON.stringify(body).match(/\b\d{6}\b/);
                 if (match) code = match[0];
             }
@@ -61,7 +59,6 @@ module.exports = async (req, res) => {
             let savedSecret = null;
             let userDocId = email;
 
-            // Koło ratunkowe na wypadek zagubienia adresu email przez formularz frontendu
             if (!email || email.trim() === "") {
                 const pendingUsers = await db.collection('users')
                     .where('status', '==', 'pending_2fa')
@@ -77,17 +74,18 @@ module.exports = async (req, res) => {
             }
 
             if (!savedSecret) {
-                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji" });
+                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji dla podanego adresu" });
             }
 
             const verified = speakeasy.totp.verify({
                 secret: savedSecret,
                 encoding: 'base32',
                 token: code.toString().trim(),
-                window: 4 // Tolerancja +/- 2 minuty desynchronizacji zegara
+                window: 4 
             });
 
             if (verified) {
+                // Aktywacja konta użytkownika w Firebase Firestore
                 await db.collection('users').doc(userDocId).update({ 
                     status: 'active',
                     activatedAt: new Date().toISOString()
@@ -96,6 +94,24 @@ module.exports = async (req, res) => {
             } else {
                 return res.status(400).json({ success: false, error: "Wprowadzony kod jest niepoprawny" });
             }
+        }
+
+        // --- ZAPIS DANYCH SYSTEMU SUKCESJI ---
+        if (body.action === 'activate_succession') {
+            const email = body.payload ? body.payload.email : null;
+            if (!email) return res.status(400).json({ error: "Nie zalogowano prawidłowo (brak email)" });
+
+            // Zapis do kolekcji bitwarden_vaults (lub vaults)
+            await db.collection('bitwarden_vaults').doc(email).set({
+                userEmail: email,
+                vaultData: body.payload.vaultData || {},
+                heirs: body.payload.heirs || [],
+                dmsTimeoutDays: body.payload.dmsTimeoutDays || 30,
+                status: "secured",
+                createdAt: new Date().toISOString()
+            });
+
+            return res.status(200).json({ success: true, message: "Dane sejfu zostały pomyślnie zapisane" });
         }
 
         return res.status(404).json({ error: `Nieznana akcja: ${body.action}` });
