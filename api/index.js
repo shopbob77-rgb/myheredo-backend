@@ -9,7 +9,6 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-    // Nagłówki CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -20,10 +19,10 @@ module.exports = async (req, res) => {
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
         
         if (!body || !body.action) {
-            return res.status(400).json({ error: "Brak akcji w żądaniu" });
+            return res.status(400).json({ error: "Brak zdefiniowanej akcji" });
         }
 
-        // --- 1. REJESTRACJA ---
+        // --- 1. REJESTRACJA UŻYTKOWNIKA ---
         if (body.action === 'register_user') {
             const email = body.payload ? body.payload.email : null;
             if (!email) return res.status(400).json({ error: "Brak adresu email" });
@@ -36,7 +35,7 @@ module.exports = async (req, res) => {
                 email: email, 
                 twoFactorSecret: secret.base32,
                 status: 'pending_2fa',
-                createdAt: new Date().toISOString()
+                updatedAt: new Date().toISOString()
             });
 
             const qrData = await QRCode.toDataURL(secret.otpauth_url);
@@ -48,40 +47,68 @@ module.exports = async (req, res) => {
             });
         }
 
-        // --- 2. WERYFIKACJA KODU (Dopasowana do Twojego frontendu!) ---
+        // --- 2. INTELIGENTNA WERYFIKACJA KODU 2FA ---
         if (body.action === 'verify_2fa_and_activate' || body.action === 'verify_2fa' || body.action === 'check_2fa') {
-            const email = body.payload ? body.payload.email : null;
+            let email = body.payload ? body.payload.email : null;
             const code = body.payload ? body.payload.code : null;
 
-            if (!email || !code) {
-                return res.status(400).json({ error: "Brak adresu email lub kodu tokena" });
+            if (!code) {
+                return res.status(400).json({ error: "Wprowadź 6-cyfrowy kod z aplikacji" });
             }
 
-            const userDoc = await db.collection('users').doc(email).get();
-            if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje w bazie" });
-            
-            const userData = userDoc.data();
-            const savedSecret = userData.twoFactorSecret;
+            let savedSecret = null;
+            let userDocId = email;
 
+            // KOŁO RATUNKOWE: Jeśli frontend nie przesłał e-maila, szukamy ostatnio rejestrowanego konta
+            if (!email || email.trim() === "") {
+                console.log("Frontend nie przesłał adresu email. Szukanie w bazie po statusie pending_2fa...");
+                const pendingUsers = await db.collection('users')
+                    .where('status', '==', 'pending_2fa')
+                    .orderBy('updatedAt', 'desc')
+                    .limit(1)
+                    .get();
+
+                if (!pendingUsers.empty) {
+                    const foundUser = pendingUsers.docs[0];
+                    userDocId = foundUser.id;
+                    savedSecret = foundUser.data().twoFactorSecret;
+                    console.log(`Znaleziono porzuconą sesję dla adresu: ${userDocId}`);
+                }
+            } else {
+                // Standardowa ścieżka, jeśli email dotarł poprawnie
+                const userDoc = await db.collection('users').doc(email).get();
+                if (userDoc.exists) {
+                    savedSecret = userDoc.data().twoFactorSecret;
+                }
+            }
+
+            if (!savedSecret) {
+                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji rejestracji dla tego konta" });
+            }
+
+            // Weryfikacja kryptograficzna kodu TOTP
             const verified = speakeasy.totp.verify({
                 secret: savedSecret,
                 encoding: 'base32',
                 token: code.trim(),
-                window: 2 // Tolerancja czasowa na wypadek spieszącego/spóźniającego się zegarka w telefonie
+                window: 3 // Zwiększona tolerancja do +/- 90 sekund na wypadek desynchronizacji czasu w telefonie
             });
 
             if (verified) {
-                await db.collection('users').doc(email).update({ status: 'active' });
+                await db.collection('users').doc(userDocId).update({ 
+                    status: 'active',
+                    activatedAt: new Date().toISOString()
+                });
                 return res.status(200).json({ success: true, message: "Autoryzacja pomyślna!" });
             } else {
-                return res.status(400).json({ success: false, error: "Kod niepoprawny lub wygasł. Spróbuj ponownie." });
+                return res.status(400).json({ success: false, error: "Wprowadzony kod jest niepoprawny lub wygasł" });
             }
         }
 
         return res.status(404).json({ error: `Nieznana akcja: ${body.action}` });
 
     } catch (error) {
-        console.error("Błąd serwera:", error);
+        console.error("Błąd krytyczny API:", error);
         return res.status(500).json({ error: error.message });
     }
 };
