@@ -12,13 +12,7 @@
     }
   ],
   "rewrites": [
-    {
-      "source": "/api",
-      "dest": "/api/index.js"
-    },
-    {
-      "source": "/api/(.*)",
-      "dest": "/api/index.js"
-    }
+    { "source": "/api", "dest": "/api/index.js" },
+    { "source": "/api/(.*)", "dest": "/api/index.js" }
   ]
 }
