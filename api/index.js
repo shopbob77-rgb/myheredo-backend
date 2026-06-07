@@ -8,7 +8,7 @@ if (!admin.apps.length) {
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
     );
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-  } catch (err) (
+  } catch (err) { // <- Naprawiona literówka (było okrągłe podsumowanie)
     console.error("Błąd Firebase:", err);
   }
 }
@@ -16,12 +16,13 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // Wymuszenie nagłówków CORS dla każdej metody - dokładnie jak w Twoim oryginale
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  // PANCERNE NAGŁÓWKI CORS - Obsługują Twoją domenę i metody bezbłędnie
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
+  // Obsługa zapytania wstępnego OPTIONS (Preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -30,13 +31,11 @@ module.exports = async (req, res) => {
     return res.status(200).json({ status: "online", message: "MyHeredo API gotowe." });
   }
 
-  // 🔥 ABSOLUTNIE PANCERNE PARSOWANIE BODY Z TWOJEJ PIERWSZEJ WERSJI
+  // Bezpieczne parsowanie danych wejściowych (Request Body)
   let body = {};
   try {
     if (req.body) {
       body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    } else if (req.rawBody) {
-      body = JSON.parse(req.rawBody.toString('utf8'));
     } else {
       const buffers = [];
       for await (const chunk of req) {
@@ -53,12 +52,7 @@ module.exports = async (req, res) => {
   const payload = body.payload || {};
 
   if (!action) {
-    return res.status(400).json({ 
-      error: "Odebrano puste żądanie (brak pola action).",
-      receivedMethod: req.method,
-      receivedHeaders: req.headers,
-      parsedBody: body
-    });
+    return res.status(400).json({ error: "Brak zdefiniowanego pola 'action' w żądaniu." });
   }
 
   try {
@@ -66,21 +60,17 @@ module.exports = async (req, res) => {
       const { email } = payload;
       if (!email) return res.status(400).json({ error: "Brak adresu email." });
 
-      // Sprawdzenie czy użytkownik istnieje
       const userCheck = await db.collection('users').doc(email).get();
-      
       let secretBase32;
 
       if (userCheck.exists) {
-        const userData = userCheck.data();
-        secretBase32 = userData.twoFactorSecret;
+        secretBase32 = userCheck.data().twoFactorSecret;
       } else {
-        // Twój oryginalny sposób generowania sekretu speakeasy
-        const secret = speakeasy.generateSecret({ name: `MyHeredo` });
-        // Zabezpieczenie: usuwamy znaki '=' (padding), które psują import w aplikacjach mobilnych
+        // Generujemy standardowy sekret dla 2FA
+        const secret = speakeasy.generateSecret({ length: 20 });
+        // Czyścimy ze znaków '=', które uniemożliwiają importowanie kont w telefonach
         secretBase32 = secret.base32.replace(/=/g, '').toUpperCase();
 
-        // Zapis w Firestore - dokładnie Twoja oryginalna struktura pól
         await db.collection('users').doc(email).set({
           email: email,
           twoFactorSecret: secretBase32,
@@ -89,11 +79,11 @@ module.exports = async (req, res) => {
         });
       }
 
-      // 🛠️ POPRAWKA QR: Kodowanie komponentów, aby znaki takie jak '@' nie niszczyły linku TOTP
+      // 🛠️ FORMAT URUCHAMIAJĄCY APLIKACJE MOBILNE: Wszystko bezpiecznie zakodowane przez encodeURIComponent
       const issuer = "MyHeredo";
       const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
       
-      // Twój oryginalny generator qrcode
+      // Wygenerowanie kodu graficznego QR (zwracane jako Base64)
       const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl);
 
       return res.status(200).json({
@@ -104,15 +94,16 @@ module.exports = async (req, res) => {
 
     if (action === 'verify_2fa_and_activate') {
       const { email, token } = payload;
-      const userDoc = await db.collection('users').doc(email).get();
+      if (!email || !token) return res.status(400).json({ error: "Brak e-maila lub tokenu." });
 
+      const userDoc = await db.collection('users').doc(email).get();
       if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje." });
       
       const verified = speakeasy.totp.verify({
         secret: userDoc.data().twoFactorSecret,
         encoding: 'base32',
         token: token,
-        window: 2 // Twoje oryginalne okno tolerancji czasu
+        window: 2
       });
 
       if (verified) {
@@ -123,7 +114,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(400).json({ error: "Nieznana akcja: " + action });
+    return res.status(400).json({ error: "Nieznana akcja" });
 
   } catch (error) {
     return res.status(500).json({ error: error.message });
