@@ -9,6 +9,7 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
+    // Uniwersalne nagłówki CORS dla eliminacji błędów blokowania zapytań
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -22,14 +23,12 @@ module.exports = async (req, res) => {
             return res.status(400).json({ error: "Brak zdefiniowanej akcji" });
         }
 
-        // --- 1. REJESTRACJA UŻYTKOWNIKA ---
+        // --- REJESTRACJA UŻYTKOWNIKA ---
         if (body.action === 'register_user') {
             const email = body.payload ? body.payload.email : null;
             if (!email) return res.status(400).json({ error: "Brak adresu email" });
 
-            const secret = speakeasy.generateSecret({
-                name: `MyHeredo (${email})`
-            });
+            const secret = speakeasy.generateSecret({ name: `MyHeredo (${email})` });
 
             await db.collection('users').doc(email).set({ 
                 email: email, 
@@ -39,72 +38,53 @@ module.exports = async (req, res) => {
             });
 
             const qrData = await QRCode.toDataURL(secret.otpauth_url);
-
-            return res.status(200).json({ 
-                success: true, 
-                qrCode: qrData,
-                secretCode: secret.base32
-            });
+            return res.status(200).json({ success: true, qrCode: qrData, secretCode: secret.base32 });
         }
 
-        // --- 2. ULTRA-ODPORNA WERYFIKACJA KODU 2FA ---
+        // --- WERYFIKACJA 2FA (Obsługuje każdą nazwę akcji z Twojego frontendu) ---
         if (body.action === 'verify_2fa_and_activate' || body.action === 'verify_2fa' || body.action === 'check_2fa') {
             let email = body.payload ? body.payload.email : (body.email || null);
-            
-            // Inteligentne szukanie 6-cyfrowego tokenu w zapytaniu
             let code = null;
-            
+
             if (body.payload && body.payload.code) code = body.payload.code;
             else if (body.code) code = body.code;
             else {
-                // KOŁO RATUNKOWE: Przeszukaj cały obiekt JSON i znajdź ciąg 6 cyfr
-                const stringifiedBody = JSON.stringify(body);
-                const match = stringifiedBody.match(/\b\d{6}\b/);
-                if (match) {
-                    code = match[0];
-                    console.log("Wykryto 6-cyfrowy kod ukryty w strukturze zapytania:", code);
-                }
+                // Skanowanie całego obiektu w poszukiwaniu ciągu 6 cyfr wpisanych przez użytkownika
+                const match = JSON.stringify(body).match(/\b\d{6}\b/);
+                if (match) code = match[0];
             }
 
-            // Jeśli absolutnie nic nie znaleźliśmy, wymuś awaryjnie weryfikację (na wypadek błędów JS)
-            if (!code || code.toString().trim() === "") {
-                console.log("Nie znaleziono kodu w strukturze. Próba parsowania awaryjnego...");
+            if (!code) {
                 return res.status(400).json({ error: "Wprowadź 6-cyfrowy kod z aplikacji" });
             }
 
             let savedSecret = null;
             let userDocId = email;
 
-            // Jeśli brak e-maila w żądaniu, pobierz ostatnio rejestrowaną sesję
+            // Koło ratunkowe na wypadek zagubienia adresu email przez formularz frontendu
             if (!email || email.trim() === "") {
                 const pendingUsers = await db.collection('users')
                     .where('status', '==', 'pending_2fa')
-                    .orderBy('updatedAt', 'desc')
-                    .limit(1)
-                    .get();
+                    .orderBy('updatedAt', 'desc').limit(1).get();
 
                 if (!pendingUsers.empty) {
-                    const foundUser = pendingUsers.docs[0];
-                    userDocId = foundUser.id;
-                    savedSecret = foundUser.data().twoFactorSecret;
+                    userDocId = pendingUsers.docs[0].id;
+                    savedSecret = pendingUsers.docs[0].data().twoFactorSecret;
                 }
             } else {
                 const userDoc = await db.collection('users').doc(email).get();
-                if (userDoc.exists) {
-                    savedSecret = userDoc.data().twoFactorSecret;
-                }
+                if (userDoc.exists) savedSecret = userDoc.data().twoFactorSecret;
             }
 
             if (!savedSecret) {
-                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji rejestracji" });
+                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji" });
             }
 
-            // Kryptograficzne sprawdzenie kodu w speakeasy
             const verified = speakeasy.totp.verify({
                 secret: savedSecret,
                 encoding: 'base32',
                 token: code.toString().trim(),
-                window: 4 // Zwiększone okno czasowe (+/- 120 sekund) na przesunięcia zegarów
+                window: 4 // Tolerancja +/- 2 minuty desynchronizacji zegara
             });
 
             if (verified) {
@@ -114,14 +94,13 @@ module.exports = async (req, res) => {
                 });
                 return res.status(200).json({ success: true, message: "Autoryzacja pomyślna!" });
             } else {
-                return res.status(400).json({ success: false, error: "Wprowadzony kod jest niepoprawny lub wygasł" });
+                return res.status(400).json({ success: false, error: "Wprowadzony kod jest niepoprawny" });
             }
         }
 
         return res.status(404).json({ error: `Nieznana akcja: ${body.action}` });
 
     } catch (error) {
-        console.error("Błąd krytyczny API:", error);
         return res.status(500).json({ error: error.message });
     }
 };
