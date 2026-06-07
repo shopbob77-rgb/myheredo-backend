@@ -46,10 +46,12 @@ module.exports = async (req, res) => {
       if (userCheck.exists) {
         secretBase32 = userCheck.data().twoFactorSecret;
       } else {
-        // Generujemy losowy ciąg bajtów i ręcznie konwertujemy na czysty, prawidłowy Base32
+        // Generujemy sekret o długości 20 bajtów (standard rygorystycznego TOTP)
         const secret = speakeasy.generateSecret({ length: 20 });
         
-        // KLUCZOWE: Zamiana na wielkie litery i bezwzględne usunięcie znaków dopełnienia '='
+        // PANCERNE SFORMATOWANIE SEKRETU:
+        // Wymuszamy wielkie litery i usuwamy znaki '=' (padding). 
+        // Aplikacje mobilne traktują znak '=' jako uszkodzenie linku.
         secretBase32 = secret.base32.toUpperCase().replace(/=/g, '');
 
         await db.collection('users').doc(email).set({
@@ -60,17 +62,16 @@ module.exports = async (req, res) => {
         });
       }
 
-      // Format wymagany przez Google/Microsoft Authenticator:
-      // otpauth://totp/Wystawca:Uzytkownik?secret=SEKRET&issuer=Wystawca
+      // POPRAWNY FORMAT URI: otpauth://totp/Wystawca:Uzytkownik?secret=SEKRET&issuer=Wystawca
       const issuer = "MyHeredo";
       
-      // Wszystkie komponenty tekstowe (w tym '@' z maila) muszą być zakodowane do URI
+      // Wszystkie zmienne tekstowe muszą przejść przez encodeURIComponent
       const encodedIssuer = encodeURIComponent(issuer);
       const encodedEmail = encodeURIComponent(email);
 
       const pureOtpauthUrl = `otpauth://totp/${encodedIssuer}:${encodedEmail}?secret=${secretBase32}&issuer=${encodedIssuer}`;
       
-      // Generowanie kodu QR o wysokiej gęstości, łatwego do odczytania przez aparat telefonu
+      // Wygenerowanie kodu QR ze średnią korekcją błędów i czytelnym marginesem dla obiektywu
       const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl, {
         errorCorrectionLevel: 'M',
         margin: 2,
@@ -82,16 +83,17 @@ module.exports = async (req, res) => {
 
     if (action === 'verify_2fa_and_activate') {
       const { email, token } = payload;
-      if (!email || !token) return res.status(400).json({ error: "Brak maila lub tokenu w żądaniu." });
+      if (!email || !token) return res.status(400).json({ error: "Brak adresu e-mail lub tokenu." });
 
       const userDoc = await db.collection('users').doc(email).get();
+
       if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje." });
       
       const verified = speakeasy.totp.verify({
         secret: userDoc.data().twoFactorSecret,
         encoding: 'base32',
         token: token,
-        window: 2 // Tolerancja +/- 60 sekund na desynchronizację zegara serwera i telefonu
+        window: 2 // Okno +/- 60 sekund (zapobiega problemom z desynchronizacją czasu telefonu)
       });
 
       if (verified) {
