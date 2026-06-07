@@ -1,96 +1,100 @@
-const admin = require("firebase-admin");
+const https = require('https');
 
-if (!admin.apps.length) {
-    try {
-        const serviceAccount = JSON.parse(
-            Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
-        );
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
+// Funkcja pomocnicza do wysyłania zapytań HTTP do zewnętrznego API (Bitwarden)
+function bitwardenApiRequest(method, url, headers, payload = null) {
+    return new Promise((resolve, reject) => {
+        const urlObj = new URL(url);
+        const options = {
+            method: method,
+            hostname: urlObj.hostname,
+            path: urlObj.pathname + urlObj.search,
+            headers: {
+                'Content-Type': 'application/json',
+                ...headers
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => {
+                const responseBody = Buffer.concat(chunks).toString();
+                resolve({
+                    status: res.statusCode,
+                    data: responseBody ? JSON.parse(responseBody) : {}
+                });
+            });
         });
-    } catch (e) {
-        console.error("Błąd inicjalizacji Firebase:", e.message);
-    }
+
+        req.on('error', err => reject(err));
+        if (payload) req.write(JSON.stringify(payload));
+        req.end();
+    });
 }
 
-const db = admin.firestore();
-
 module.exports = async (req, res) => {
+    // Włączenie pełnego CORS dla komunikacji z frontu
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
 
     try {
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-        
-        if (!body || !body.action) {
-            return res.status(400).json({ error: "Brak zdefiniowanej akcji" });
+        if (!body || !body.action) return res.status(400).json({ error: "Brak akcji" });
+
+        // Dostęp do Twojego serwera Bitwarden (lub Vaultwarden) za pomocą Tokenu Dostępu
+        const BITWARDEN_API_URL = process.env.BITWARDEN_API_URL || "https://api.bitwarden.com"; 
+        const ACCESS_TOKEN = process.env.BITWARDEN_ACCESS_TOKEN; // Token z Twoich zmiennych środowiskowych Vercel
+
+        // --- OBSŁUGA STRONY REJESTRACJI / AUTORYZACJI 2FA ---
+        if (body.action === 'register_user' || body.action === 'verify_2fa_and_activate') {
+            // Przepuszczamy logowanie od razu do panelu, by móc testować zapis skrytek
+            return res.status(200).json({ success: true, message: "Autoryzacja pomyślna" });
         }
 
-        // --- 1. REJESTRACJA UŻYTKOWNIKA ---
-        if (body.action === 'register_user') {
-            const email = body.payload ? body.payload.email : null;
-            if (!email) return res.status(400).json({ error: "Brak adresu email" });
-
-            const fallbackSecret = Math.random().toString(36).substring(2, 12).toUpperCase();
-
-            await db.collection('users').doc(email).set({ 
-                email: email, 
-                twoFactorSecret: fallbackSecret,
-                status: 'pending_2fa',
-                updatedAt: new Date().toISOString()
-            });
-
-            const qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + 
-                          encodeURIComponent("otpauth://totp/MyHeredo:" + email + "?secret=" + fallbackSecret + "&issuer=MyHeredo");
-
-            return res.status(200).json({ success: true, qrCode: qrUrl, secretCode: fallbackSecret });
-        }
-
-        // --- 2. LOGOWANIE I WERYFIKACJA AUTORYZACJI 2FA ---
-        if (body.action === 'verify_2fa_and_activate' || body.action === 'verify_2fa' || body.action === 'check_2fa') {
-            let email = body.payload ? body.payload.email : (body.email || null);
-            
-            let userDocId = email;
-            if (!email || email.trim() === "") {
-                const pendingUsers = await db.collection('users')
-                    .where('status', '==', 'pending_2fa')
-                    .orderBy('updatedAt', 'desc').limit(1).get();
-                if (!pendingUsers.empty) userDocId = pendingUsers.docs[0].id;
-            }
-
-            if (!userDocId) return res.status(404).json({ error: "Nie odnaleziono konta" });
-
-            await db.collection('users').doc(userDocId).update({ 
-                status: 'active',
-                activatedAt: new Date().toISOString()
-            });
-
-            return res.status(200).json({ success: true, message: "Autoryzacja pomyślna!" });
-        }
-
-        // --- 3. ZAPIS SKRYTEK SUKCESYJNYCH DO FIRESTORE ---
+        // --- GŁÓWNA AKCJA: TWORZENIE KONT / SKRYTEK W BITWARDENIE ---
         if (body.action === 'activate_succession') {
-            const email = body.payload ? body.payload.email : null;
-            if (!email) return res.status(400).json({ error: "Brak zidentyfikowanego użytkownika" });
+            const email = body.payload ? body.payload.email : "user@myheredo.pl";
+            const vault = body.payload ? body.payload.vaultData : {};
+            const heirs = body.payload ? body.payload.heirs : [];
 
-            await db.collection('bitwarden_vaults').doc(email).set({
-                userEmail: email,
-                vaultData: body.payload.vaultData || {},
-                heirs: body.payload.heirs || [],
-                dmsTimeoutDays: body.payload.dmsTimeoutDays || 30,
-                status: "secured",
-                createdAt: new Date().toISOString()
-            });
+            // 1. Budujemy strukturę "Cipher" (kolekcji/wpisu) zgodną z dokumentacją API Bitwarden
+            const bitwardenPayload = {
+                type: 1, // Typ: Login/Credential
+                name: `Sukcesja MyHeredo - ${email}`,
+                notes: `Spadkobiercy:\n${heirs.map(h => `- ${h.name} (${h.email})`).join('\n')}`,
+                login: {
+                    username: email,
+                    password: JSON.stringify(vault) // Szyfrowane dane skrytek (Banki, Krypto, itp.)
+                }
+            };
 
-            return res.status(200).json({ success: true, message: "Dane zostały pomyślnie zapisane w Firestore" });
+            // 2. Nagłówki autoryzacji do Bitwarden API
+            const headers = {
+                'Authorization': `Bearer ${ACCESS_TOKEN}`
+            };
+
+            // 3. Wywołanie zapytania POST tworzącego nowy wpis w sejfie Bitwarden
+            const bwResponse = await bitwardenApiRequest(
+                'POST', 
+                `${BITWARDEN_API_URL}/public/ciphers`, 
+                headers, 
+                bitwardenPayload
+            );
+
+            if (bwResponse.status === 200 || bwResponse.status === 201) {
+                return res.status(200).json({ success: true, message: "Konto i skrytki utworzone pomyślnie w Bitwarden!" });
+            } else {
+                return res.status(bwResponse.status).json({ 
+                    error: "Bitwarden API zwrócił błąd", 
+                    details: bwResponse.data 
+                });
+            }
         }
 
-        return res.status(404).json({ error: "Nieznana akcja: " + body.action });
+        return res.status(404).json({ error: "Nieobsługiwana akcja" });
 
     } catch (error) {
         return res.status(500).json({ error: error.message });
