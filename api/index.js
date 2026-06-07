@@ -1,6 +1,6 @@
 const admin = require("firebase-admin");
 const QRCode = require('qrcode');
-const { authenticator } = require('otplib'); // Biblioteka do obsługi prawdziwego 2FA
+const speakeasy = require('speakeasy'); // Używamy Twojej biblioteki z package.json
 
 if (!admin.apps.length) {
     const serviceAccount = JSON.parse(Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8'));
@@ -9,7 +9,6 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-    // Obsługa CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -19,52 +18,53 @@ module.exports = async (req, res) => {
     try {
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-        // --- AKCJA 1: REJESTRACJA I GENEROWANIE PRAWDZIWEGO 2FA ---
+        // --- AKCJA 1: REJESTRACJA I GENEROWANIE PRAWDZIWEGO KODU QR ---
         if (body.action === 'register_user') {
             const email = body.payload ? body.payload.email : null;
             if (!email) return res.status(400).json({ error: "Brak adresu email" });
 
-            // 1. Generujemy tajny klucz (Secret) dla Google Authenticator
-            const secret = authenticator.generateSecret();
+            // Generujemy sekret za pomocą speakeasy
+            const secret = speakeasy.generateSecret({
+                name: `MyHeredo (${email})`
+            });
 
-            // 2. Tworzymy oficjalny link standardu OTPAuth, który aplikacje 2FA potrafią odczytać
-            // Format: otpauth://totp/[NazwaAplikacji]:[Email]?secret=[Klucz]&issuer=[NazwaAplikacji]
-            const otpauthUrl = authenticator.keyuri(email, 'MyHeredo', secret);
-
-            // 3. Zapisujemy użytkownika oraz jego SECRET w bazie Firebase
+            // Zapisujemy użytkownika oraz jego SECRET w bazie Firebase
             await db.collection('users').doc(email).set({ 
                 email: email, 
-                twoFactorSecret: secret, // To posłuży do późniejszej weryfikacji kodu
+                twoFactorSecret: secret.base32, // Zapisujemy unikalny klucz w formacie base32
                 status: 'pending_2fa',
                 createdAt: new Date().toISOString()
             });
 
-            // 4. Generujemy kod QR z poprawnego linku OTPAuth
-            const qrData = await QRCode.toDataURL(otpauthUrl);
+            // Generujemy kod QR z oficjalnego linku otpauthUrl, który telefon zrozumie
+            const qrData = await QRCode.toDataURL(secret.otpauth_url);
 
             return res.status(200).json({ 
                 success: true, 
                 qrCode: qrData,
-                secretCode: secret // Przekazujemy też tekstowo, gdyby użytkownik chciał wpisać klucz ręcznie
+                secretCode: secret.base32 // Kod tekstowy (awaryjny)
             });
         }
 
-        // --- AKCJA 2: WERYFIKACJA 6-CYFROWEGO KODU ---
+        // --- AKCJA 2: WERYFIKACJA 6-CYFROWEGO KODU Z TELEFONU ---
         if (body.action === 'verify_2fa') {
             const { email, code } = body.payload;
             
-            // Pobieramy dane użytkownika z Firebase, żeby wyciągnąć jego "secret"
             const userDoc = await db.collection('users').doc(email).get();
             if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje" });
             
             const userData = userDoc.data();
-            const secret = userData.twoFactorSecret;
+            const savedSecret = userData.twoFactorSecret;
 
-            // Sprawdzamy, czy kod wpisany przez użytkownika zgadza się z kluczem w bazie
-            const isValid = authenticator.check(code, secret);
+            // Weryfikacja kodu przez speakeasy
+            const verified = speakeasy.totp.verify({
+                secret: savedSecret,
+                encoding: 'base32',
+                token: code,
+                window: 1 // Tolerancja +/- 30 sekund na opóźnienia w czasie na telefonie
+            });
 
-            if (isValid) {
-                // Kod poprawny! Aktywujemy konto w Firebase
+            if (verified) {
                 await db.collection('users').doc(email).update({ status: 'active' });
                 return res.status(200).json({ success: true, message: "Autoryzacja pomyślna" });
             } else {
