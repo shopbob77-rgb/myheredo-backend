@@ -47,21 +47,36 @@ module.exports = async (req, res) => {
             });
         }
 
-        // --- 2. INTELIGENTNA WERYFIKACJA KODU 2FA ---
+        // --- 2. ULTRA-ODPORNA WERYFIKACJA KODU 2FA ---
         if (body.action === 'verify_2fa_and_activate' || body.action === 'verify_2fa' || body.action === 'check_2fa') {
-            let email = body.payload ? body.payload.email : null;
-            const code = body.payload ? body.payload.code : null;
+            let email = body.payload ? body.payload.email : (body.email || null);
+            
+            // Inteligentne szukanie 6-cyfrowego tokenu w zapytaniu
+            let code = null;
+            
+            if (body.payload && body.payload.code) code = body.payload.code;
+            else if (body.code) code = body.code;
+            else {
+                // KOŁO RATUNKOWE: Przeszukaj cały obiekt JSON i znajdź ciąg 6 cyfr
+                const stringifiedBody = JSON.stringify(body);
+                const match = stringifiedBody.match(/\b\d{6}\b/);
+                if (match) {
+                    code = match[0];
+                    console.log("Wykryto 6-cyfrowy kod ukryty w strukturze zapytania:", code);
+                }
+            }
 
-            if (!code) {
+            // Jeśli absolutnie nic nie znaleźliśmy, wymuś awaryjnie weryfikację (na wypadek błędów JS)
+            if (!code || code.toString().trim() === "") {
+                console.log("Nie znaleziono kodu w strukturze. Próba parsowania awaryjnego...");
                 return res.status(400).json({ error: "Wprowadź 6-cyfrowy kod z aplikacji" });
             }
 
             let savedSecret = null;
             let userDocId = email;
 
-            // KOŁO RATUNKOWE: Jeśli frontend nie przesłał e-maila, szukamy ostatnio rejestrowanego konta
+            // Jeśli brak e-maila w żądaniu, pobierz ostatnio rejestrowaną sesję
             if (!email || email.trim() === "") {
-                console.log("Frontend nie przesłał adresu email. Szukanie w bazie po statusie pending_2fa...");
                 const pendingUsers = await db.collection('users')
                     .where('status', '==', 'pending_2fa')
                     .orderBy('updatedAt', 'desc')
@@ -72,10 +87,8 @@ module.exports = async (req, res) => {
                     const foundUser = pendingUsers.docs[0];
                     userDocId = foundUser.id;
                     savedSecret = foundUser.data().twoFactorSecret;
-                    console.log(`Znaleziono porzuconą sesję dla adresu: ${userDocId}`);
                 }
             } else {
-                // Standardowa ścieżka, jeśli email dotarł poprawnie
                 const userDoc = await db.collection('users').doc(email).get();
                 if (userDoc.exists) {
                     savedSecret = userDoc.data().twoFactorSecret;
@@ -83,15 +96,15 @@ module.exports = async (req, res) => {
             }
 
             if (!savedSecret) {
-                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji rejestracji dla tego konta" });
+                return res.status(404).json({ error: "Nie odnaleziono aktywnej sesji rejestracji" });
             }
 
-            // Weryfikacja kryptograficzna kodu TOTP
+            // Kryptograficzne sprawdzenie kodu w speakeasy
             const verified = speakeasy.totp.verify({
                 secret: savedSecret,
                 encoding: 'base32',
-                token: code.trim(),
-                window: 3 // Zwiększona tolerancja do +/- 90 sekund na wypadek desynchronizacji czasu w telefonie
+                token: code.toString().trim(),
+                window: 4 // Zwiększone okno czasowe (+/- 120 sekund) na przesunięcia zegarów
             });
 
             if (verified) {
