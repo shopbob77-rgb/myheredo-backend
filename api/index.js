@@ -46,8 +46,14 @@ module.exports = async (req, res) => {
       if (userCheck.exists) {
         secretBase32 = userCheck.data().twoFactorSecret;
       } else {
-        const secret = speakeasy.generateSecret({ name: `MyHeredo` });
-        secretBase32 = secret.base32;
+        // Generujemy bezpieczny, czysty klucz bez znaków specjalnych i paddingu '='
+        const secret = speakeasy.generateSecret({ 
+          length: 20, 
+          name: `MyHeredo`
+        });
+        
+        // Czyszczenie klucza na wypadek, gdyby speakeasy dodało znaki dopełnienia
+        secretBase32 = secret.base32.replace(/=/g, '').toUpperCase();
 
         await db.collection('users').doc(email).set({
           email: email,
@@ -57,9 +63,18 @@ module.exports = async (req, res) => {
         });
       }
 
-      // 🛠️ PRZYWRÓCENIE PANCERNEGO FORMATU LINKU TOTP (Bez zbędnych znaków, czysty e-mail i issuer)
-      const pureOtpauthUrl = `otpauth://totp/MyHeredo:${email}?secret=${secretBase32}&issuer=MyHeredo`;
-      const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl);
+      // 🛠️ ROZWIĄZANIE PROBLEMU QR: Pełne kodowanie URI znaków specjalnych (np. dwukropka i małpy @)
+      const issuer = "MyHeredo";
+      const label = email;
+      
+      // Oficjalny format: otpauth://totp/Issuer:Label?secret=SECRET&issuer=Issuer
+      const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(label)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
+      
+      // Wygenerowanie kodu QR z wyższym stopniem korekcji błędów 'M' dla bezbłędnego skanowania aparatami
+      const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl, {
+        errorCorrectionLevel: 'M',
+        margin: 2
+      });
 
       return res.status(200).json({ success: true, qrCode: qrCodeDataUrl });
     }
@@ -74,7 +89,7 @@ module.exports = async (req, res) => {
         secret: userDoc.data().twoFactorSecret,
         encoding: 'base32',
         token: token,
-        window: 2
+        window: 2 // Akceptacja kodów spóźnionych/przyspieszonych o 30s ze względu na desynchronizację zegarów
       });
 
       if (verified) {
