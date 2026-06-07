@@ -1,3 +1,5 @@
+// Wstaw to jako pierwszą linię wewnątrz głównej funkcji (action == 'register_user')
+console.log("DEBUG: Otrzymano żądanie z frontend dla maila:", email);
 const admin = require("firebase-admin");
 const speakeasy = require("speakeasy");
 const qrcode = require("qrcode");
