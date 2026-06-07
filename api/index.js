@@ -8,7 +8,7 @@ if (!admin.apps.length) {
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8')
     );
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-  } catch (err) { // <--- NAPRAWIONE: Prawidłowy nawias klamrowy {
+  } catch (err) {
     console.error("Błąd Firebase:", err);
   }
 }
@@ -82,9 +82,9 @@ module.exports = async (req, res) => {
         });
       }
 
-      // 🛠️ GENEROWANIE LINKU TOTP (Bezpiecznie zakodowane komponenty)
+      // 🛠️ POPRAWKA SKANERA: Jawny dwukropek i niezakodowany email dla natywnego wsparcia systemowego
       const issuer = "MyHeredo";
-      const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
+      const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${email}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
       
       // Konwersja linku na obrazek QR w formacie Base64 DataURL
       const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl);
