@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "description": "Zabezpieczony most API MyHeredo",
   "main": "api/index.js",
-  "scripts": {
-    "start": "node api/index.js"
-  },
   "dependencies": {
     "firebase-admin": "^12.0.0",
     "speakeasy": "^2.0.0",
