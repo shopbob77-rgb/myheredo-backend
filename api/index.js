@@ -9,7 +9,7 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-    // Pełne nagłówki CORS dla stabilnej komunikacji między domenami
+    // Nagłówki CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -19,17 +19,14 @@ module.exports = async (req, res) => {
     try {
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
         
-        // Krytyczne logowanie: Zobaczymy w panelu Vercel co dokładnie wysyła Twój frontend
-        console.log("Otrzymano zapytanie POST. Wykryta akcja:", body ? body.action : "BRAK AKCJI");
-
         if (!body || !body.action) {
-            return res.status(400).json({ error: "Brak zdefiniowanej akcji w formacie JSON" });
+            return res.status(400).json({ error: "Brak akcji w żądaniu" });
         }
 
-        // --- 1. REJESTRACJA UŻYTKOWNIKA I GENEROWANIE QR ---
+        // --- 1. REJESTRACJA ---
         if (body.action === 'register_user') {
             const email = body.payload ? body.payload.email : null;
-            if (!email) return res.status(400).json({ error: "Brak adresu email w payloadzie" });
+            if (!email) return res.status(400).json({ error: "Brak adresu email" });
 
             const secret = speakeasy.generateSecret({
                 name: `MyHeredo (${email})`
@@ -51,17 +48,17 @@ module.exports = async (req, res) => {
             });
         }
 
-        // --- 2. WERYFIKACJA KODU 2FA (Obsługuje obie potencjalne nazwy akcji z frontendu) ---
-        if (body.action === 'verify_2fa' || body.action === 'check_2fa') {
+        // --- 2. WERYFIKACJA KODU (Dopasowana do Twojego frontendu!) ---
+        if (body.action === 'verify_2fa_and_activate' || body.action === 'verify_2fa' || body.action === 'check_2fa') {
             const email = body.payload ? body.payload.email : null;
             const code = body.payload ? body.payload.code : null;
 
             if (!email || !code) {
-                return res.status(400).json({ error: "Brak wymaganego adresu email lub kodu weryfikacyjnego" });
+                return res.status(400).json({ error: "Brak adresu email lub kodu tokena" });
             }
 
             const userDoc = await db.collection('users').doc(email).get();
-            if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie został znaleziony w bazie danych" });
+            if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje w bazie" });
             
             const userData = userDoc.data();
             const savedSecret = userData.twoFactorSecret;
@@ -70,23 +67,21 @@ module.exports = async (req, res) => {
                 secret: savedSecret,
                 encoding: 'base32',
                 token: code.trim(),
-                window: 2 // Zwiększona tolerancja czasowa (+/- 60 sekund) na wypadek przesunięcia zegara w telefonie
+                window: 2 // Tolerancja czasowa na wypadek spieszącego/spóźniającego się zegarka w telefonie
             });
 
             if (verified) {
                 await db.collection('users').doc(email).update({ status: 'active' });
-                return res.status(200).json({ success: true, message: "Autoryzacja 2FA zakończona sukcesem" });
+                return res.status(200).json({ success: true, message: "Autoryzacja pomyślna!" });
             } else {
-                return res.status(400).json({ success: false, error: "Wprowadzony kod jest niepoprawny lub stracił ważność" });
+                return res.status(400).json({ success: false, error: "Kod niepoprawny lub wygasł. Spróbuj ponownie." });
             }
         }
 
-        // Jeśli frontend przysłał coś zupełnie innego (np. activate_succession)
-        console.log(`Zgłoszono nieobsługiwaną akcję: ${body.action}`);
         return res.status(404).json({ error: `Nieznana akcja: ${body.action}` });
 
     } catch (error) {
-        console.error("KRYTYCZNY BŁĄD SERWERA:", error);
+        console.error("Błąd serwera:", error);
         return res.status(500).json({ error: error.message });
     }
 };
