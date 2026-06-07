@@ -46,14 +46,11 @@ module.exports = async (req, res) => {
       if (userCheck.exists) {
         secretBase32 = userCheck.data().twoFactorSecret;
       } else {
-        // Generujemy bezpieczny, czysty klucz bez znaków specjalnych i paddingu '='
-        const secret = speakeasy.generateSecret({ 
-          length: 20, 
-          name: `MyHeredo`
-        });
+        // Generujemy losowy ciąg bajtów i ręcznie konwertujemy na czysty, prawidłowy Base32
+        const secret = speakeasy.generateSecret({ length: 20 });
         
-        // Czyszczenie klucza na wypadek, gdyby speakeasy dodało znaki dopełnienia
-        secretBase32 = secret.base32.replace(/=/g, '').toUpperCase();
+        // KLUCZOWE: Zamiana na wielkie litery i bezwzględne usunięcie znaków dopełnienia '='
+        secretBase32 = secret.base32.toUpperCase().replace(/=/g, '');
 
         await db.collection('users').doc(email).set({
           email: email,
@@ -63,17 +60,21 @@ module.exports = async (req, res) => {
         });
       }
 
-      // 🛠️ ROZWIĄZANIE PROBLEMU QR: Pełne kodowanie URI znaków specjalnych (np. dwukropka i małpy @)
+      // Format wymagany przez Google/Microsoft Authenticator:
+      // otpauth://totp/Wystawca:Uzytkownik?secret=SEKRET&issuer=Wystawca
       const issuer = "MyHeredo";
-      const label = email;
       
-      // Oficjalny format: otpauth://totp/Issuer:Label?secret=SECRET&issuer=Issuer
-      const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(label)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
+      // Wszystkie komponenty tekstowe (w tym '@' z maila) muszą być zakodowane do URI
+      const encodedIssuer = encodeURIComponent(issuer);
+      const encodedEmail = encodeURIComponent(email);
+
+      const pureOtpauthUrl = `otpauth://totp/${encodedIssuer}:${encodedEmail}?secret=${secretBase32}&issuer=${encodedIssuer}`;
       
-      // Wygenerowanie kodu QR z wyższym stopniem korekcji błędów 'M' dla bezbłędnego skanowania aparatami
+      // Generowanie kodu QR o wysokiej gęstości, łatwego do odczytania przez aparat telefonu
       const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl, {
         errorCorrectionLevel: 'M',
-        margin: 2
+        margin: 2,
+        width: 250
       });
 
       return res.status(200).json({ success: true, qrCode: qrCodeDataUrl });
@@ -81,15 +82,16 @@ module.exports = async (req, res) => {
 
     if (action === 'verify_2fa_and_activate') {
       const { email, token } = payload;
-      const userDoc = await db.collection('users').doc(email).get();
+      if (!email || !token) return res.status(400).json({ error: "Brak maila lub tokenu w żądaniu." });
 
+      const userDoc = await db.collection('users').doc(email).get();
       if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje." });
       
       const verified = speakeasy.totp.verify({
         secret: userDoc.data().twoFactorSecret,
         encoding: 'base32',
         token: token,
-        window: 2 // Akceptacja kodów spóźnionych/przyspieszonych o 30s ze względu na desynchronizację zegarów
+        window: 2 // Tolerancja +/- 60 sekund na desynchronizację zegara serwera i telefonu
       });
 
       if (verified) {
