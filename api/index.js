@@ -1,6 +1,7 @@
 const admin = require("firebase-admin");
 const speakeasy = require("speakeasy");
 const qrcode = require("qrcode");
+const https = require("https"); // Używamy natywnego, stabilnego modułu Node.js
 
 // 1. INICJALIZACJA FIREBASE
 if (!admin.apps.length) {
@@ -17,7 +18,33 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 // =========================================================================
-// BEZPIECZNA FUNKCJA POMOCNICZA: Pobieranie tokenu sesji z Bitwarden Teams
+// FUNKCJA POMOCNICZA DO WYKONYWANIA ŻĄDAŃ HTTPS (Zastępuje problematyczny fetch)
+// =========================================================================
+function makeHttpsRequest(url, options, postData = null) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode,
+          headers: res.headers,
+          body: data
+        });
+      });
+    });
+
+    req.on('error', (e) => { reject(e); });
+
+    if (postData) {
+      req.write(postData);
+    }
+    req.end();
+  });
+}
+
+// =========================================================================
+// BEZPIECZNA FUNKCJA: Pobieranie tokenu sesji z Bitwarden Teams
 // =========================================================================
 async function getBitwardenToken() {
   const clientId = process.env.BITWARDEN_CLIENT_ID;
@@ -27,48 +54,39 @@ async function getBitwardenToken() {
     throw new Error("Brak zmiennych BITWARDEN_CLIENT_ID lub BITWARDEN_CLIENT_SECRET w panelu Vercel.");
   }
 
-  const params = new URLSearchParams();
-  params.append("grant_type", "client_credentials");
-  params.append("client_id", clientId);
-  params.append("client_secret", clientSecret);
-  params.append("scope", "api");
+  const postData = `grant_type=client_credentials&client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}&scope=api`;
 
-  const response = await fetch("https://identity.bitwarden.com/connect/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params
-  });
+  const options = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(postData)
+    }
+  };
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Bitwarden Identity Server zwrocil blad: ${response.status} - ${errText}`);
+  const response = await makeHttpsRequest("https://identity.bitwarden.com/connect/token", options, postData);
+
+  if (response.statusCode !== 200) {
+    throw new Error(`Bitwarden Identity Error: ${response.statusCode} - ${response.body}`);
   }
 
-  const data = await response.json();
+  const data = JSON.parse(response.body);
   return data.access_token;
 }
 
 // =========================================================================
-// GŁÓWNY HANDLER VERCEL (WEJŚCIE DLA API)
+// GŁÓWNY HANDLER VERCEL
 // =========================================================================
 module.exports = async (req, res) => {
-  // USTAWIEŃ NAGŁÓWKÓW CORS (Zawsze na poczatku, zeby uniknac bledow w przegladarce)
+  // Nagłówki CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  // Obsluga zapytan wstepnych OPTIONS
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'GET') return res.status(200).json({ status: "online", message: "Serwer MyHeredo dziala." });
 
-  // Monitor statusu serwera przez zwykle GET
-  if (req.method === 'GET') {
-    return res.status(200).json({ status: "online", message: "Serwer MyHeredo dziala poprawnie." });
-  }
-
-  // PARSOWANIE STRUMIENIA DANYCH JSON
   let body = {};
   try {
     if (req.body) {
@@ -80,21 +98,16 @@ module.exports = async (req, res) => {
       if (data) body = JSON.parse(data);
     }
   } catch (e) {
-    console.error("Blad parsowania JSON:", e);
     return res.status(400).json({ error: "Nieprawidlowy format żądania JSON." });
   }
 
   const action = body.action;
   const payload = body.payload || {};
 
-  if (!action) {
-    return res.status(400).json({ error: "Brak zdefiniowanego pola 'action'." });
-  }
+  if (!action) return res.status(400).json({ error: "Brak zdefiniowanego pola 'action'." });
 
   try {
-    // ---------------------------------------------------------------------
-    // AKCJA 1: REJESTRACJA UŻYTKOWNIKA + ZAPROSZENIE DO BITWARDEN TEAMS
-    // ---------------------------------------------------------------------
+    // 1. REJESTRACJA UŻYTKOWNIKA
     if (action === 'register_user') {
       const { email } = payload;
       if (!email) return res.status(400).json({ error: "Brak adresu email użytkownika." });
@@ -110,21 +123,153 @@ module.exports = async (req, res) => {
         const secret = speakeasy.generateSecret({ length: 20 });
         secretBase32 = secret.base32.toUpperCase().replace(/=/g, '');
 
-        // Zapis w Firebase dziala najpierw, zeby system nie stanal w miejscu
+        // Podstawowy bezpieczny zapis w Firebase
         await db.collection('users').doc(email).set({
           email: email,
           twoFactorSecret: secretBase32,
           twoFactorEnabled: false,
-          bitwardenIntegrationStatus: "W trakcie wysylania zaproszenia...",
+          bitwardenIntegrationStatus: "Przetwarzanie...",
           createdAt: new Date().toISOString()
         });
 
-        // Proba wyslania zaproszenia do Bitwardena w bezpiecznym bloku try-catch
         try {
           if (!process.env.BITWARDEN_CLIENT_ID || !process.env.BITWARDEN_CLIENT_SECRET) {
-            bitwardenStatus = "Blad: Brak skonfigurowanych zmiennych srodowiskowych na Vercelu.";
+            bitwardenStatus = "Blad: Brak zmiennych srodowiskowych na Vercelu.";
           } else {
             const token = await getBitwardenToken();
-            const orgId = process.env.BITWARDEN_CLIENT_ID.replace("organization.", "");
+            
+            // Bezpieczne parowanie ID organizacji
+            let orgId = process.env.BITWARDEN_CLIENT_ID;
+            if (orgId.includes("organization.")) {
+              orgId = orgId.replace("organization.", "");
+            }
 
-            const bwInviteResponse = await fetch(`https://api.bit
+            const postData = JSON.stringify({
+              emails: [email],
+              type: 2,
+              accessAll: false,
+              collections: []
+            });
+
+            const options = {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+              }
+            };
+
+            const bwResponse = await makeHttpsRequest(`https://api.bitwarden.com/api/v1/organizations/${orgId}/members`, options, postData);
+
+            if (bwResponse.statusCode === 200 || bwResponse.statusCode === 201) {
+              bitwardenStatus = "Sukces: Zaproszenie Teams zostalo wyslane!";
+            } else {
+              bitwardenStatus = `Bitwarden API zwrocil status ${bwResponse.statusCode}: ${bwResponse.body}`;
+            }
+          }
+        } catch (bwErr) {
+          bitwardenStatus = "Awaria polaczenia Bitwarden: " + bwErr.message;
+        }
+
+        // Aktualizacja wyniku w Firebase
+        await db.collection('users').doc(email).update({
+          bitwardenIntegrationStatus: bitwardenStatus
+        });
+      }
+
+      const issuer = "MyHeredo";
+      const pureOtpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${email}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}`;
+      const qrCodeDataUrl = await qrcode.toDataURL(pureOtpauthUrl);
+
+      return res.status(200).json({
+        success: true,
+        qrCode: qrCodeDataUrl,
+        bitwardenMessage: bitwardenStatus
+      });
+    }
+
+    // 2. WERYFIKACJA 2FA
+    if (action === 'verify_2fa_and_activate') {
+      const { email, token } = payload;
+      if (!email || !token) return res.status(400).json({ error: "Brak e-maila lub tokenu 2FA." });
+
+      const userDoc = await db.collection('users').doc(email).get();
+      if (!userDoc.exists) return res.status(404).json({ error: "Użytkownik nie istnieje w bazie." });
+      
+      const verified = speakeasy.totp.verify({
+        secret: userDoc.data().twoFactorSecret,
+        encoding: 'base32',
+        token: token,
+        window: 2
+      });
+
+      if (verified) {
+        await db.collection('users').doc(email).update({ twoFactorEnabled: true });
+        return res.status(200).json({ success: true });
+      } else {
+        return res.status(400).json({ error: "Podany kod z aplikacji 2FA jest bledny." });
+      }
+    }
+
+    // 3. SUWAK I EMERGENY ACCESS
+    if (action === 'activate_succession') {
+      const { email, heirs, dmsTimeoutDays, vaultData, categoryNames } = payload;
+      if (!email) return res.status(400).json({ error: "Brak adresu email." });
+
+      await db.collection('successions').doc(email).set({
+        userEmail: email,
+        heirs: heirs || [],
+        dmsTimeoutDays: dmsTimeoutDays || 30,
+        vaultData: vaultData || {},
+        categoryNames: categoryNames || {},
+        activatedAt: new Date().toISOString(),
+        lastActivity: new Date().toISOString()
+      }, { merge: true });
+
+      if (heirs && heirs.length > 0) {
+        const primaryHeirEmail = heirs[0].email;
+
+        try {
+          const token = await getBitwardenToken();
+          
+          const postData = JSON.stringify({
+            type: 1,
+            email: primaryHeirEmail,
+            waitTimeDays: parseInt(dmsTimeoutDays)
+          });
+
+          const options = {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(postData)
+            }
+          };
+
+          const bwResponse = await makeHttpsRequest('https://api.bitwarden.com/api/v1/emergency-access', options, postData);
+
+          if (bwResponse.statusCode !== 200 && bwResponse.statusCode !== 201) {
+            throw new Error(`Status ${bwResponse.statusCode}: ${bwResponse.body}`);
+          }
+        } catch (bwError) {
+          return res.status(200).json({ 
+            success: true, 
+            message: "Firebase OK, lecz problem z suwakiem w Bitwardenie: " + bwError.message 
+          });
+        }
+      }
+
+      return res.status(200).json({ 
+        success: true, 
+        message: "Protokol uzbrojony w Firebase i zsynchronizowany z suwakiem dni." 
+      });
+    }
+
+    return res.status(400).json({ error: "Nieznana akcja: " + action });
+
+  } catch (error) {
+    return res.status(500).json({ error: "Blad serwera: " + error.message });
+  }
+};
